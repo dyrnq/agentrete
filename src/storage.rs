@@ -37,6 +37,12 @@ impl Store {
 
         // Enable WAL mode for concurrent reads
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;").ok();
+        // Load sqlite-vec extension
+        unsafe {
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )));
+        }
 
         let (tx, rx) = watch::channel(true);
 
@@ -91,6 +97,11 @@ impl Store {
                 content,
                 content_rowid='rowid',
                 tokenize='unicode61'
+            );
+
+            -- sqlite-vec virtual table for KNN vector search
+            CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
+                embedding float[768]
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
@@ -225,6 +236,15 @@ impl Store {
             params![rowid, input.content],
         ).ok();
 
+        // Sync to vec0 if embedding exists
+        if let Some(ref vec) = embedding_vec {
+            let blob = floats_to_blob(vec);
+            self.conn.execute(
+                "INSERT OR REPLACE INTO vec_memories(rowid, embedding) VALUES (?1, ?2)",
+                params![rowid, blob],
+            ).ok();
+        }
+
         Ok(id)
     }
 
@@ -259,9 +279,9 @@ impl Store {
 
         let mut stmt = self.conn.prepare(sql)?;
         let rows: Vec<SearchResult> = match memory_type {
-            Some(t) => stmt.query_map(params![query, t, limit_i64], |row| map_search_row(row))?
+            Some(t) => stmt.query_map(params![query, t, limit_i64], |row| map_fts_row(row))?
                 .filter_map(|r| r.ok()).collect(),
-            None => stmt.query_map(params![query, limit_i64], |row| map_search_row(row))?
+            None => stmt.query_map(params![query, limit_i64], |row| map_fts_row(row))?
                 .filter_map(|r| r.ok()).collect(),
         };
 
@@ -327,44 +347,37 @@ impl Store {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-struct SearchRow {
-    id: String,
-    memory_type: Option<String>,
-    content: String,
-    tags: Option<String>,
-    files: Option<String>,
-    project: Option<String>,
-    importance: f64,
-    created_at: Option<String>,
-    embedding: Option<Vec<u8>>,
-}
-
-fn map_search_row(row: &rusqlite::Row) -> rusqlite::Result<SearchResult> {
-    let raw = SearchRow {
+// KNN row mapper (includes score from vec0)
+fn map_knn_row(row: &rusqlite::Row) -> rusqlite::Result<SearchResult> {
+    Ok(SearchResult {
         id: row.get(0)?,
         memory_type: row.get(1)?,
         content: row.get(2)?,
-        tags: row.get(3)?,
-        files: row.get(4)?,
+        tags: parse_json_array(&row.get::<_, Option<String>>(3)?),
+        files: parse_json_array(&row.get::<_, Option<String>>(4)?),
         project: row.get(5)?,
         importance: row.get(6)?,
-        created_at: row.get(7)?,
-        embedding: row.get(8)?,
-    };
-    Ok(SearchResult {
-        id: raw.id,
-        memory_type: raw.memory_type,
-        content: raw.content,
-        tags: parse_json_array(&raw.tags),
-        files: parse_json_array(&raw.files),
-        project: raw.project,
-        importance: raw.importance,
-        score: 0.0,
-        created_at: raw.created_at.unwrap_or_default(),
-        embedding: raw.embedding,
+        score: row.get::<_, f64>(8)?,
+        created_at: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+        embedding: None,
     })
 }
 
+// FTS row mapper (BM25 only, no embedding)
+fn map_fts_row(row: &rusqlite::Row) -> rusqlite::Result<SearchResult> {
+    Ok(SearchResult {
+        id: row.get(0)?,
+        memory_type: row.get(1)?,
+        content: row.get(2)?,
+        tags: parse_json_array(&row.get::<_, Option<String>>(3)?),
+        files: parse_json_array(&row.get::<_, Option<String>>(4)?),
+        project: row.get(5)?,
+        importance: row.get(6)?,
+        score: 0.5,
+        created_at: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+        embedding: None,
+    })
+}
 fn parse_json_array(val: &Option<String>) -> Option<Vec<String>> {
     match val {
         Some(s) if !s.is_empty() => serde_json::from_str(s).ok(),
