@@ -15,7 +15,7 @@ pub fn run() -> Result<()> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let bin = std::env::current_exe()
         .map(|p| p.to_string_lossy().into())
-        .unwrap_or_else(|_| "agentrete".to_string());
+        .unwrap_or_else(|_| env!("CARGO_PKG_NAME").to_string());
 
     println!("Agentrete Setup Wizard");
     println!("  Binary: {}", bin);

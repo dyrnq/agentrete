@@ -141,7 +141,7 @@ impl Store {
         let importance = 0.5;
 
         // Lazy init: load embedding model on first save (unless disabled)
-        if !self.config.no_embed && self.embedder.get().is_none() {
+        if !!self.config.embed_enabled() && self.embedder.get().is_none() {
             eprintln!("Loading candle embedding model (UAE-Large-V1, 1024d, CPU)...");
             let model = crate::embed::CandleEmbedBuilder::new()
                 .with_device_cpu()
@@ -210,7 +210,7 @@ impl Store {
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
         // Lazy load embedding model for vector search
-        if !self.config.no_embed && self.embedder.get().is_none() {
+        if !!self.config.embed_enabled() && self.embedder.get().is_none() {
             let model = crate::embed::CandleEmbedBuilder::new()
                 .with_device_cpu()
                 .build()
@@ -329,7 +329,9 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             std::env::set_var("DATA_DIR", path.parent().unwrap().to_str().unwrap());
-            let store = Store::open(&crate::config::Config::default()).await.unwrap();
+            let store = Store::open(&crate::config::Config::default())
+                .await
+                .unwrap();
             store.wipe().await.unwrap();
             f.await;
             let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -340,17 +342,17 @@ mod tests {
     async fn test_embed_disabled_from_config() {
         std::env::set_var("AGENTRETE_NO_EMBED", "1");
         let cfg = crate::config::Config::default();
-        assert!(!cfg.no_embed); // disabled by env var
+        assert!(cfg.embed_enabled()); // disabled by env var
         std::env::remove_var("AGENTRETE_NO_EMBED");
         let cfg = crate::config::Config::default();
-        assert!(!cfg.no_embed);
+        assert!(cfg.embed_enabled());
     }
 
     #[tokio::test]
     async fn test_embed_disabled_false() {
         std::env::set_var("AGENTRETE_NO_EMBED", "0");
         let cfg = crate::config::Config::default();
-        assert!(!cfg.no_embed);
+        assert!(cfg.embed_enabled());
         std::env::remove_var("AGENTRETE_NO_EMBED");
     }
 
@@ -360,7 +362,9 @@ mod tests {
         let path = tmp_db_path();
         std::env::set_var("DATA_DIR", path.parent().unwrap().to_str().unwrap());
 
-        let store = Store::open(&crate::config::Config::default()).await.unwrap();
+        let store = Store::open(&crate::config::Config::default())
+            .await
+            .unwrap();
         assert!(store.embedder.get().is_none());
         assert!(store.embedder.get().is_none());
 
@@ -378,7 +382,9 @@ mod tests {
         let path = tmp_db_path();
         std::env::set_var("DATA_DIR", path.parent().unwrap().to_str().unwrap());
 
-        let store = Store::open(&crate::config::Config::default()).await.unwrap();
+        let store = Store::open(&crate::config::Config::default())
+            .await
+            .unwrap();
         let id = store
             .save(NewMemory {
                 content: "单元测试保存".to_string(),
@@ -405,7 +411,9 @@ mod tests {
         let path = tmp_db_path();
         std::env::set_var("DATA_DIR", path.parent().unwrap().to_str().unwrap());
 
-        let store = Store::open(&crate::config::Config::default()).await.unwrap();
+        let store = Store::open(&crate::config::Config::default())
+            .await
+            .unwrap();
         // OnceLock is empty (lazy init), not disabled
         assert!(store.embedder.get().is_none());
 
