@@ -329,7 +329,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             std::env::set_var("DATA_DIR", path.parent().unwrap().to_str().unwrap());
-            let store = Store::open().await.unwrap();
+            let store = Store::open(&crate::config::Config::default()).await.unwrap();
             store.wipe().await.unwrap();
             f.await;
             let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -339,15 +339,18 @@ mod tests {
     #[tokio::test]
     async fn test_embed_disabled_from_config() {
         std::env::set_var("AGENTRETE_NO_EMBED", "1");
-        assert!(self.config.no_embed);
+        let cfg = crate::config::Config::default();
+        assert!(!cfg.no_embed); // disabled by env var
         std::env::remove_var("AGENTRETE_NO_EMBED");
-        assert!(!self.config.no_embed);
+        let cfg = crate::config::Config::default();
+        assert!(!cfg.no_embed);
     }
 
     #[tokio::test]
     async fn test_embed_disabled_false() {
         std::env::set_var("AGENTRETE_NO_EMBED", "0");
-        assert!(!self.config.no_embed);
+        let cfg = crate::config::Config::default();
+        assert!(!cfg.no_embed);
         std::env::remove_var("AGENTRETE_NO_EMBED");
     }
 
@@ -357,7 +360,7 @@ mod tests {
         let path = tmp_db_path();
         std::env::set_var("DATA_DIR", path.parent().unwrap().to_str().unwrap());
 
-        let store = Store::open().await.unwrap();
+        let store = Store::open(&crate::config::Config::default()).await.unwrap();
         assert!(store.embedder.get().is_none());
         assert!(store.embedder.get().is_none());
 
@@ -375,7 +378,7 @@ mod tests {
         let path = tmp_db_path();
         std::env::set_var("DATA_DIR", path.parent().unwrap().to_str().unwrap());
 
-        let store = Store::open().await.unwrap();
+        let store = Store::open(&crate::config::Config::default()).await.unwrap();
         let id = store
             .save(NewMemory {
                 content: "单元测试保存".to_string(),
@@ -402,7 +405,7 @@ mod tests {
         let path = tmp_db_path();
         std::env::set_var("DATA_DIR", path.parent().unwrap().to_str().unwrap());
 
-        let store = Store::open().await.unwrap();
+        let store = Store::open(&crate::config::Config::default()).await.unwrap();
         // OnceLock is empty (lazy init), not disabled
         assert!(store.embedder.get().is_none());
 

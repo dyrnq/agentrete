@@ -1,6 +1,7 @@
 //! Unified configuration: CLI args → env vars → config file → defaults.
 //!
 //! Priority (highest first): CLI args > env vars > config file > defaults.
+//! Config file format auto-detected from extension: toml, yaml, yml, json.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -31,15 +32,9 @@ pub struct Config {
     pub cache_dir: Option<PathBuf>,
 }
 
-fn default_port() -> u16 {
-    DEFAULT_PORT
-}
-fn default_model() -> String {
-    DEFAULT_MODEL.to_string()
-}
-fn default_hf_endpoint() -> String {
-    "https://hf-mirror.com".to_string()
-}
+fn default_port() -> u16 { DEFAULT_PORT }
+fn default_model() -> String { DEFAULT_MODEL.to_string() }
+fn default_hf_endpoint() -> String { "https://hf-mirror.com".to_string() }
 
 impl Default for Config {
     fn default() -> Self {
@@ -65,7 +60,6 @@ impl Config {
                 cfg.merge(c);
             }
         } else {
-            // Try default locations
             for loc in default_config_locations() {
                 if let Ok(c) = Self::from_file(&loc) {
                     cfg.merge(c);
@@ -85,53 +79,40 @@ impl Config {
         cfg
     }
 
+    /// Parse config file, auto-detecting format from extension.
     fn from_file(path: &str) -> Result<Config, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
-        let cfg: Config = toml::from_str(&content)?;
+        let cfg = if path.ends_with(".yaml") || path.ends_with(".yml") {
+            serde_yaml::from_str(&content)?
+        } else if path.ends_with(".json") {
+            serde_json::from_str(&content)?
+        } else {
+            // Default: TOML (also covers .toml extension)
+            toml::from_str(&content)?
+        };
         Ok(cfg)
     }
 
     fn from_env() -> Config {
         Config {
-            port: std::env::var("AGENTRETE_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
+            port: std::env::var("AGENTRETE_PORT").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
             model_id: std::env::var("AGENTRETE_MODEL").ok().unwrap_or_default(),
-            hf_endpoint: std::env::var("HF_ENDPOINT")
-                .ok()
-                .unwrap_or_else(|| "https://hf-mirror.com".to_string()),
-            no_embed: std::env::var("AGENTRETE_NO_EMBED")
-                .map(|v| v == "1" || v == "true")
-                .unwrap_or(false),
+            hf_endpoint: std::env::var("HF_ENDPOINT").ok().unwrap_or_else(|| "https://hf-mirror.com".to_string()),
+            no_embed: std::env::var("AGENTRETE_NO_EMBED").map(|v| v == "1" || v == "true").unwrap_or(false),
             db_dir: std::env::var("AGENTRETE_DB_DIR").ok().map(PathBuf::from),
             cache_dir: std::env::var("AGENTRETE_CACHE_DIR").ok().map(PathBuf::from),
         }
     }
 
-    /// Merge non-zero/non-empty values from other into self.
     fn merge(&mut self, other: Config) {
-        if other.port != 0 {
-            self.port = other.port;
-        }
-        if !other.model_id.is_empty() {
-            self.model_id = other.model_id;
-        }
-        if other.hf_endpoint != "https://hf-mirror.com" {
-            self.hf_endpoint = other.hf_endpoint;
-        }
-        if other.no_embed {
-            self.no_embed = true;
-        }
-        if other.db_dir.is_some() {
-            self.db_dir = other.db_dir;
-        }
-        if other.cache_dir.is_some() {
-            self.cache_dir = other.cache_dir;
-        }
+        if other.port != 0 { self.port = other.port; }
+        if !other.model_id.is_empty() { self.model_id = other.model_id; }
+        if other.hf_endpoint != "https://hf-mirror.com" { self.hf_endpoint = other.hf_endpoint; }
+        if other.no_embed { self.no_embed = true; }
+        if other.db_dir.is_some() { self.db_dir = other.db_dir; }
+        if other.cache_dir.is_some() { self.cache_dir = other.cache_dir; }
     }
 
-    /// Resolved database directory path.
     pub fn db_dir(&self) -> PathBuf {
         self.db_dir.clone().unwrap_or_else(|| {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -139,7 +120,7 @@ impl Config {
         })
     }
 
-    /// Resolved HuggingFace cache directory.
+    #[allow(dead_code)]
     pub fn hf_cache_dir(&self) -> PathBuf {
         self.cache_dir.clone().unwrap_or_else(|| {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -148,21 +129,23 @@ impl Config {
     }
 }
 
-/// Default config file search locations.
 fn default_config_locations() -> Vec<String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     vec![
+        format!("{}/.agentrete/config.toml", home),
+        format!("{}/.agentrete/config.yaml", home),
+        format!("{}/.agentrete/config.yml", home),
+        format!("{}/.agentrete/config.json", home),
         "agentrete.toml".to_string(),
-        format!(
-            "{}/.agentrete/config.toml",
-            std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
-        ),
+        "agentrete.yaml".to_string(),
+        "agentrete.yml".to_string(),
+        "agentrete.json".to_string(),
     ]
 }
 
-/// Generate a sample config file to stdout.
+#[allow(dead_code)]
 pub fn generate_sample() -> String {
-    let cfg = Config::default();
-    toml::to_string_pretty(&cfg).unwrap_or_default()
+    toml::to_string_pretty(&Config::default()).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -191,21 +174,35 @@ mod tests {
     #[test]
     fn test_merge() {
         let mut base = Config::default();
-        let over = Config {
-            port: 9999,
-            model_id: String::new(), // empty → don't override
-            no_embed: true,
-            ..Config::default()
-        };
+        let over = Config { port: 9999, model_id: String::new(), no_embed: true, ..Config::default() };
         base.merge(over);
         assert_eq!(base.port, 9999);
-        assert_eq!(base.model_id, "moka-ai/m3e-base"); // unchanged
+        assert_eq!(base.model_id, "moka-ai/m3e-base");
         assert!(base.no_embed);
     }
 
     #[test]
-    fn test_sample_config_can_parse() {
-        let sample = generate_sample();
-        let _: Config = toml::from_str(&sample).unwrap();
+    fn test_parse_toml() {
+        let toml_str = r#"port = 8888
+model_id = "x/y"
+no_embed = true
+"#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.port, 8888);
+        assert!(cfg.no_embed);
+    }
+
+    #[test]
+    fn test_parse_yaml() {
+        let yaml_str = "port: 7777\nmodel_id: a/b\nno_embed: true\n";
+        let cfg: Config = serde_yaml::from_str(yaml_str).unwrap();
+        assert_eq!(cfg.port, 7777);
+    }
+
+    #[test]
+    fn test_parse_json() {
+        let json_str = r#"{"port": 6666, "model_id": "c/d", "no_embed": true}"#;
+        let cfg: Config = serde_json::from_str(json_str).unwrap();
+        assert_eq!(cfg.port, 6666);
     }
 }
