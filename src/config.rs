@@ -318,7 +318,7 @@ port = 9092
 backend = "remote"
 remote_url = "https://api.openai.com/v1"
 remote_api_key = "sk-xxx"
-remote_model = "text-embedding-3-small"
+remote_model = "qwen3-embedding:latest"
 dims = 1536
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();

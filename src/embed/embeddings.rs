@@ -28,7 +28,7 @@ impl Embedder {
                 let model = cfg
                     .remote_model
                     .as_deref()
-                    .unwrap_or("text-embedding-3-small");
+                    .unwrap_or("qwen3-embedding:latest");
                 let remote = super::remote::RemoteEmbedder::new(
                     url,
                     cfg.remote_api_key.as_deref(),
