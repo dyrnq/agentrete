@@ -1,0 +1,103 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -File ${USERPROFILE}\\.codex\\plugins\\agentrete\\hooks\\scripts\\session-start.ps1",
+            "statusMessage": "agentrete: loading context"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -File ${USERPROFILE}\\.codex\\plugins\\agentrete\\hooks\\scripts\\prompt-submit.ps1",
+            "statusMessage": "agentrete: recalling memories"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|Bash|exec_command|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -File ${USERPROFILE}\\.codex\\plugins\\agentrete\\hooks\\scripts\\pre-tool-use.ps1"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash|exec_command|apply_patch|mcp__agentrete__*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -File ${USERPROFILE}\\.codex\\plugins\\agentrete\\hooks\\scripts\\post-tool-use.ps1",
+            "statusMessage": "agentrete: saving observation"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -File ${USERPROFILE}\\.codex\\plugins\\agentrete\\hooks\\scripts\\pre-compact.ps1",
+            "statusMessage": "agentrete: snapshotting context"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -File ${USERPROFILE}\\.codex\\plugins\\agentrete\\hooks\\scripts\\post-compact.ps1",
+            "statusMessage": "agentrete: reloading memories"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -File ${USERPROFILE}\\.codex\\plugins\\agentrete\\hooks\\scripts\\subagent-start.ps1",
+            "statusMessage": "agentrete: loading for subagent"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -File ${USERPROFILE}\\.codex\\plugins\\agentrete\\hooks\\scripts\\subagent-stop.ps1",
+            "statusMessage": "agentrete: saving subagent observations"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -File ${USERPROFILE}\\.codex\\plugins\\agentrete\\hooks\\scripts\\stop.ps1"
+          }
+        ]
+      }
+    ]
+  }
+}

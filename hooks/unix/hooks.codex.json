@@ -1,0 +1,103 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${HOME}/.codex/plugins/agentrete/hooks/scripts/session-start.sh",
+            "statusMessage": "agentrete: loading context"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${HOME}/.codex/plugins/agentrete/hooks/scripts/prompt-submit.sh",
+            "statusMessage": "agentrete: recalling memories"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|Bash|exec_command|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${HOME}/.codex/plugins/agentrete/hooks/scripts/pre-tool-use.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash|exec_command|apply_patch|mcp__agentrete__*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${HOME}/.codex/plugins/agentrete/hooks/scripts/post-tool-use.sh",
+            "statusMessage": "agentrete: saving observation"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${HOME}/.codex/plugins/agentrete/hooks/scripts/pre-compact.sh",
+            "statusMessage": "agentrete: snapshotting context"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${HOME}/.codex/plugins/agentrete/hooks/scripts/post-compact.sh",
+            "statusMessage": "agentrete: reloading memories"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${HOME}/.codex/plugins/agentrete/hooks/scripts/subagent-start.sh",
+            "statusMessage": "agentrete: loading for subagent"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${HOME}/.codex/plugins/agentrete/hooks/scripts/subagent-stop.sh",
+            "statusMessage": "agentrete: saving subagent observations"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh ${HOME}/.codex/plugins/agentrete/hooks/scripts/stop.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
