@@ -16,10 +16,16 @@ pub struct Store {
     path: PathBuf,
     embedder: Option<Arc<Embedder>>,
     vec_enabled: bool,
+    vec_dims: usize,
 }
 
 impl Store {
     pub async fn open(cfg: &crate::config::Config, embedder: Option<Embedder>) -> Result<Self> {
+        let dims = if cfg.embedding.backend == crate::config::EmbeddingBackend::Remote {
+            cfg.embedding.remote.dims.unwrap_or(768) as usize
+        } else {
+            cfg.embedding.local.dims as usize
+        };
         let path = cfg.db_dir().join("memory.db");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -55,7 +61,11 @@ impl Store {
             path,
             embedder: embedder.map(Arc::new),
             vec_enabled,
+            vec_dims: dims,
         };
+        if vec_enabled {
+            store.init_vec().await?;
+        }
         if vec_enabled {
             store.init_vec().await?;
         }
@@ -101,13 +111,11 @@ impl Store {
     }
 
     async fn init_vec(&self) -> Result<()> {
-        sqlx::query(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
-                embedding float[768]
-            )",
-        )
-        .execute(&self.pool)
-        .await?;
+        let sql = format!(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[{}])",
+            self.vec_dims
+        );
+        sqlx::query(&sql).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -154,16 +162,30 @@ impl Store {
             .collect())
     }
 
-    /// Search — auto-selects hybrid if embedder is available, falls back to FTS5.
+    /// Search — auto-selects vec (KNN) > hybrid (cosine) > FTS5 (BM25).
     pub async fn search(
         &self,
         query: &str,
         limit: u8,
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
+        // Prefer sqlite-vec KNN if extension is loaded and embedder is available
+        if self.vec_enabled {
+            if let Some(ref emb) = self.embedder {
+                if let Ok(query_vec) = emb.embed_one(query).await {
+                    if let Ok(results) = self.search_vec(&query_vec, limit, memory_type).await {
+                        if !results.is_empty() {
+                            return Ok(results);
+                        }
+                    }
+                }
+            }
+        }
+        // Fallback: hybrid (cosine rerank) if embedder is available
         if let Some(ref emb) = self.embedder {
             return self.search_hybrid(emb, query, limit, memory_type).await;
         }
+        // Final fallback: FTS5 BM25 only
         self.search_fts(query, limit, memory_type).await
     }
 
@@ -531,6 +553,25 @@ impl Store {
                 .bind(id)
                 .execute(&self.pool)
                 .await?;
+
+            // Also insert into vec0 for KNN search
+            if self.vec_enabled {
+                if let Ok(rowid) =
+                    sqlx::query_scalar::<_, i64>("SELECT rowid FROM memories WHERE id = ?1")
+                        .bind(id)
+                        .fetch_one(&self.pool)
+                        .await
+                {
+                    let json_vec = serde_json::to_string(vec).unwrap_or_default();
+                    sqlx::query(
+                        "INSERT OR REPLACE INTO vec_memories(rowid, embedding) VALUES (?1, ?2)",
+                    )
+                    .bind(rowid)
+                    .bind(&json_vec)
+                    .execute(&self.pool)
+                    .await?;
+                }
+            }
         }
 
         Ok(ids.len())
