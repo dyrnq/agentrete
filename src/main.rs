@@ -489,7 +489,9 @@ Status: ✅ agentrete is healthy"
             let result = match port {
                 Some(_p) => mcp::run_http(store, &cfg).await,
                 None => {
-                    log::info!("agentrete: stdio mode (embed worker disabled, use HTTP for embeddings)");
+                    log::info!(
+                        "agentrete: stdio mode (embed worker disabled, use HTTP for embeddings)"
+                    );
                     mcp::run_stdio(store).await
                 }
             };

@@ -36,9 +36,14 @@ impl Store {
             .create_if_missing(true)
             .foreign_keys(true);
 
-        let ext_so = std::env::current_dir()
-            .unwrap_or_default()
-            .join("ext/vec0.so");
+        let ext_name = if cfg!(target_os = "windows") {
+            "ext/vec0.dll"
+        } else if cfg!(target_os = "macos") {
+            "ext/vec0.dylib"
+        } else {
+            "ext/vec0.so"
+        };
+        let ext_so = std::env::current_dir().unwrap_or_default().join(ext_name);
         if ext_so.exists() {
             let ext_path = ext_so.to_string_lossy().to_string();
             opts = opts.extension(ext_path.clone());
@@ -184,7 +189,9 @@ impl Store {
                             return Ok(results);
                         }
                         Ok(_) => log::info!("search: vec0 KNN empty, falling back to hybrid"),
-                        Err(e) => log::info!("search: vec0 KNN error ({e}), falling back to hybrid"),
+                        Err(e) => {
+                            log::info!("search: vec0 KNN error ({e}), falling back to hybrid")
+                        }
                     }
                 }
             }
