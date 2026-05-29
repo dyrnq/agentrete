@@ -45,6 +45,45 @@ impl RemoteEmbedder {
         rt.block_on(self.embed_one_async(text))
     }
 
+    
+    /// Embed multiple texts in one API call (Ollama & OpenAI both support batch).
+    pub async fn embed_batch_async(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        match self.provider {
+            RemoteProvider::Ollama => self.embed_batch_ollama(texts).await,
+            RemoteProvider::OpenAI => self.embed_batch_openai(texts).await,
+        }
+    }
+
+    async fn embed_batch_ollama(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() { return Ok(vec![]); }
+        let endpoint = format!("{}/api/embed", self.url);
+        let body = serde_json::json!({ "model": self.model, "input": texts });
+        let resp: serde_json::Value = self.client.post(&endpoint).json(&body).send().await?.json().await?;
+        let arr = resp["embeddings"].as_array()
+            .ok_or_else(|| anyhow::anyhow!("Ollama batch: missing embeddings"))?;
+        arr.iter()
+            .map(|v| v.as_array().map(|a| a.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect()))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| anyhow::anyhow!("Ollama batch: invalid embedding format"))
+    }
+
+    async fn embed_batch_openai(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() { return Ok(vec![]); }
+        let endpoint = format!("{}/embeddings", self.url);
+        let body = serde_json::json!({ "model": self.model, "input": texts });
+        let mut req = self.client.post(&endpoint).json(&body);
+        if let Some(ref key) = self.api_key {
+            req = req.header("Authorization", format!("Bearer {}", key));
+        }
+        let resp: serde_json::Value = req.send().await?.json().await?;
+        let data = resp["data"].as_array()
+            .ok_or_else(|| anyhow::anyhow!("OpenAI batch: missing data"))?;
+        data.iter()
+            .map(|d| d["embedding"].as_array().map(|a| a.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect()))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| anyhow::anyhow!("OpenAI batch: invalid embedding format"))
+    }
+
     pub async fn embed_one_async(&self, text: &str) -> Result<Vec<f32>> {
         match self.provider {
             RemoteProvider::OpenAI => self.embed_openai(text).await,

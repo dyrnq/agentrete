@@ -33,6 +33,17 @@ impl Embedder {
         }
     }
 
+    
+    pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        match self {
+            Embedder::Local(mutex) => {
+                let guard = mutex.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
+                guard.embed_batch(texts)
+            }
+            Embedder::Remote(remote) => remote.embed_batch_async(texts).await,
+        }
+    }
+
     pub async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
         match self {
             Embedder::Local(mutex) => {
