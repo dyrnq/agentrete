@@ -1,5 +1,7 @@
 #![allow(dead_code, unreachable_code)]
+pub mod embeddings;
 pub mod models;
+pub mod remote;
 use anyhow::{Error, Result};
 use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;

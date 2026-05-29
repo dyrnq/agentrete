@@ -12,33 +12,12 @@ use uuid::Uuid;
 
 use crate::types::{DbStats, Memory, NewMemory, SearchResult};
 
-/// Default database path.
-fn default_db_path() -> PathBuf {
-    let home = std::env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
-    home.join(".agentrete").join("memory.db")
-}
-
-/// Resolve database path from env or default.
-fn db_path() -> PathBuf {
-    std::env::var("MEMORY_DIR")
-        .map(PathBuf::from)
-        .map(|p| p.join("memory.db"))
-        .or_else(|_| {
-            std::env::var("DATA_DIR")
-                .map(PathBuf::from)
-                .map(|p| p.join("memory.db"))
-        })
-        .unwrap_or_else(|_| default_db_path())
-}
-
 /// agentrete storage manager.
 pub struct Store {
     conn: Connection,
     path: PathBuf,
     config: crate::config::Config,
-    embedder: std::sync::OnceLock<std::sync::Mutex<crate::embed::BasedBertEmbedder>>,
+    embedder: std::sync::OnceLock<crate::embed::embeddings::Embedder>,
 }
 
 impl Store {
@@ -141,21 +120,20 @@ impl Store {
         let importance = 0.5;
 
         // Lazy init: load embedding model on first save (unless disabled)
-        if !!self.config.embed_enabled() && self.embedder.get().is_none() {
-            eprintln!("Loading candle embedding model (UAE-Large-V1, 1024d, CPU)...");
-            let model = crate::embed::CandleEmbedBuilder::new()
-                .with_device_cpu()
-                .build()
-                .context("Failed to load embed model")?;
-            let _ = self.embedder.set(std::sync::Mutex::new(model));
+        if self.config.embed_enabled() && self.embedder.get().is_none() {
+            eprintln!(
+                "Loading embedding model (backend={:?}, model={})...",
+                self.config.embedding.backend, self.config.embedding.model_id
+            );
+            let emb = crate::embed::embeddings::Embedder::from_config(&self.config.embedding)
+                .context("Failed to load embedder")?;
+            let _ = self.embedder.set(emb);
         }
 
-        let embedding_vec = self.embedder.get().and_then(|model| {
-            model
-                .lock()
-                .ok()
-                .and_then(|m| m.embed_one(input.content.as_str()).ok())
-        });
+        let embedding_vec = self
+            .embedder
+            .get()
+            .and_then(|emb| emb.embed_one(input.content.as_str()).ok());
 
         if let Some(vec) = &embedding_vec {
             let dims = vec.len() as i32;
@@ -210,17 +188,19 @@ impl Store {
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
         // Lazy load embedding model for vector search
-        if !!self.config.embed_enabled() && self.embedder.get().is_none() {
-            let model = crate::embed::CandleEmbedBuilder::new()
-                .with_device_cpu()
-                .build()
-                .context("Failed to load embed model")?;
-            let _ = self.embedder.set(std::sync::Mutex::new(model));
+        if self.config.embed_enabled() && self.embedder.get().is_none() {
+            eprintln!(
+                "Loading embedding model for search (backend={:?})...",
+                self.config.embedding.backend
+            );
+            let emb = crate::embed::embeddings::Embedder::from_config(&self.config.embedding)
+                .context("Failed to load embedder")?;
+            let _ = self.embedder.set(emb);
         }
         let query_embedding = self
             .embedder
             .get()
-            .and_then(|model| model.lock().ok().and_then(|m| m.embed_one(query).ok()));
+            .and_then(|emb| emb.embed_one(query).ok());
         crate::search::search_fts(&self.conn, query, limit, memory_type, query_embedding)
     }
 
