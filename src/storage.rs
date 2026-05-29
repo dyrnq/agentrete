@@ -348,9 +348,14 @@ impl Store {
         Ok(results)
     }
 
-    pub async fn list(&self, limit: u8) -> Result<Vec<Memory>> {
-        let rows: Vec<MemoryRow> = sqlx::query_as("SELECT id,type,content,tags,files,project,importance,created_at,updated_at FROM memories ORDER BY created_at DESC LIMIT ?1")
-            .bind(limit.min(100) as i64).fetch_all(&self.pool).await?;
+    pub async fn list(&self, limit: u8, memory_type: Option<&str>) -> Result<Vec<Memory>> {
+        let rows: Vec<MemoryRow> = if let Some(t) = memory_type {
+            sqlx::query_as("SELECT id,type,content,tags,files,project,importance,created_at,updated_at FROM memories WHERE type=?1 ORDER BY created_at DESC LIMIT ?2")
+                .bind(t).bind(limit.min(100) as i64).fetch_all(&self.pool).await?
+        } else {
+            sqlx::query_as("SELECT id,type,content,tags,files,project,importance,created_at,updated_at FROM memories ORDER BY created_at DESC LIMIT ?1")
+                .bind(limit.min(100) as i64).fetch_all(&self.pool).await?
+        };
         Ok(rows
             .into_iter()
             .map(|r| Memory {

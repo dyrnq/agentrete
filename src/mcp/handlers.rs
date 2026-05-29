@@ -9,7 +9,7 @@ pub(crate) fn tools_list() -> Value {
     serde_json::json!({"tools":[
         {"name":"memory_search","description":"Search","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"number"}},"required":["query"]}},
         {"name":"memory_save","description":"Save","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"type":{"type":"string"},"tags":{"type":"string"}},"required":["content"]}},
-        {"name":"memory_list","description":"List","inputSchema":{"type":"object","properties":{"limit":{"type":"number"}},"required":[]}},
+        {"name":"memory_list","description":"List memories, optionally filtered by type","inputSchema":{"type":"object","properties":{"limit":{"type":"number"},"type":{"type":"string"}},"required":[]}},
         {"name":"memory_forget","description":"Delete","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
         {"name":"memory_stats","description":"Stats","inputSchema":{"type":"object","properties":{},"required":[]}},
         {"name":"memory_compact","description":"Deduplicate memories (exact or semantic) and reclaim disk space","inputSchema":{"type":"object","properties":{"mode":{"type":"string"}},"required":[]}}
@@ -102,7 +102,10 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                         Err(e) => jsonrpc_err(&id, -32000, &format!("Search failed: {}", e)),
                     }
                 }
-                "memory_list" => match store.list(a["limit"].as_u64().unwrap_or(10) as u8).await {
+                "memory_list" => match store
+                    .list(a["limit"].as_u64().unwrap_or(10) as u8, a["type"].as_str())
+                    .await
+                {
                     Ok(e) => {
                         let items: Vec<Value> = e
                             .into_iter()

@@ -341,7 +341,7 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
             }
         }
         Commands::List { limit } => {
-            let entries = store.list(limit).await?;
+            let entries = store.list(limit, None).await?;
             if entries.is_empty() {
                 println!("No memories.");
             } else {
