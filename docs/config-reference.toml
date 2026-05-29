@@ -1,0 +1,75 @@
+# Agentrete Configuration Reference
+# Copy to ~/.agentrete/config.toml and customize.
+
+# ─── Server ──────────────────────────────────────────────────────────────────
+
+port = 9092
+# db_dir = "/path/to/data"
+# cache_dir = "/path/to/cache"
+
+# ─── Embedding ───────────────────────────────────────────────────────────────
+
+[embedding]
+backend = "remote"      # "none" | "local" | "remote"
+
+# ── Local backend ────────────────────────────────────────────────────────────
+[embedding.local]
+# model = "BAAI/bge-small-zh-v1.5"   # HF model ID (93MB, 512d)
+# revision = "main"
+# dims = 512
+# endpoint = "https://hf-mirror.com"
+
+# ── Remote backend ───────────────────────────────────────────────────────────
+[embedding.remote]
+url = "http://localhost:11434"
+model = "qwen3-embedding:latest"
+dims = 4096
+# vendor = "ollama"           # "openai" | "anthropic" | "ollama" (auto-detect)
+# api_key = "sk-xxx"          # required for Anthropic / OpenAI
+
+# ─── Alternative Configurations ──────────────────────────────────────────────
+
+# No embedding (FTS5-only BM25):
+# [embedding]
+# backend = "none"
+
+# Local offline model:
+# [embedding]
+# backend = "local"
+#
+# [embedding.local]
+# model = "BAAI/bge-small-zh-v1.5"
+# dims = 512
+
+# OpenAI API:
+# [embedding]
+# backend = "remote"
+#
+# [embedding.remote]
+# url = "https://api.openai.com/v1"
+# model = "text-embedding-3-small"
+# api_key = "sk-xxx"
+# vendor = "openai"
+# dims = 1536
+
+# Anthropic API:
+# [embedding]
+# backend = "remote"
+#
+# [embedding.remote]
+# url = "https://api.anthropic.com"
+# model = "voyage-3"
+# api_key = "sk-ant-xxx"
+# vendor = "anthropic"
+# dims = 1024
+
+# ─── Environment Variables (AGENTRETE__ prefix, __ separator) ────────────────
+#   AGENTRETE__PORT=9092
+#   AGENTRETE__EMBEDDING__BACKEND=remote
+#   AGENTRETE__EMBEDDING__LOCAL__MODEL=BAAI/bge-small-zh-v1.5
+#   AGENTRETE__EMBEDDING__LOCAL__DIMS=512
+#   AGENTRETE__EMBEDDING__REMOTE__URL=http://localhost:11434
+#   AGENTRETE__EMBEDDING__REMOTE__MODEL=qwen3-embedding:latest
+#   AGENTRETE__EMBEDDING__REMOTE__DIMS=4096
+#   AGENTRETE__EMBEDDING__REMOTE__VENDOR=ollama
+#   AGENTRETE__EMBEDDING__REMOTE__API_KEY=sk-xxx

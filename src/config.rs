@@ -54,45 +54,45 @@ impl RemoteVendor {
 }
 
 /// Embedding model configuration.
+/// Remote API sub-config (TOML: [embedding.remote]).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RemoteConfig {
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub vendor: Option<RemoteVendor>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub dims: Option<u16>,
+}
+
+/// Local model sub-config (TOML: [embedding.local]).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LocalConfig {
+    #[serde(default = "default_model_id")]
+    pub model: String,
+    #[serde(default = "default_revision")]
+    pub revision: String,
+    #[serde(default = "default_dims")]
+    pub dims: u16,
+    #[serde(default = "default_hf_endpoint")]
+    pub endpoint: String,
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
     /// Backend type: none, local, remote.
     #[serde(default)]
     pub backend: EmbeddingBackend,
 
-    /// HuggingFace model ID (only for `local` backend).
-    #[serde(default = "default_model_id")]
-    pub model_id: String,
-
-    /// HuggingFace model revision.
-    #[serde(default = "default_revision")]
-    pub revision: String,
-
-    /// Embedding vector dimensions (model-specific).
-    /// 768 for m3e-base, 1024 for bge-m3, 4096 for qwen3-embedding.
-    #[serde(default = "default_dims")]
-    pub dims: u16,
-
-    /// HuggingFace endpoint mirror.
-    #[serde(default = "default_hf_endpoint")]
-    pub hf_endpoint: String,
-
-    // ─── Remote backend fields ───────────────────────────────────────────────
-    /// Remote embeddings API base URL (e.g., https://api.openai.com/v1).
     #[serde(default)]
-    pub remote_url: Option<String>,
-
-    /// Remote embeddings API key.
+    pub remote: RemoteConfig,
     #[serde(default)]
-    pub remote_api_key: Option<String>,
-
-    /// Remote embeddings vendor (auto-detected from URL if unset).
-    #[serde(default)]
-    pub remote_vendor: Option<RemoteVendor>,
-
-    /// Remote embeddings model name (e.g., text-embedding-3-small).
-    #[serde(default)]
-    pub remote_model: Option<String>,
+    pub local: LocalConfig,
 }
 
 fn default_model_id() -> String {
@@ -112,14 +112,8 @@ impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
             backend: EmbeddingBackend::Local,
-            model_id: default_model_id(),
-            revision: default_revision(),
-            dims: default_dims(),
-            hf_endpoint: default_hf_endpoint(),
-            remote_url: None,
-            remote_api_key: None,
-            remote_vendor: None,
-            remote_model: None,
+            local: LocalConfig::default(),
+            remote: RemoteConfig::default(),
         }
     }
 }
@@ -163,26 +157,27 @@ impl Default for Config {
 impl Config {
     /// Load config from all sources: file → env vars → CLI args.
     pub fn load(cli_port: Option<u16>, cli_config: Option<&str>) -> Self {
-        let mut cfg = Config::default();
+        use ::config::{Config as ConfigBuilder, File, Environment};
 
-        // 1. Config file
+        let mut builder = ConfigBuilder::builder();
+
         if let Some(path) = cli_config {
-            if let Ok(c) = Self::from_file(path) {
-                cfg.merge(c);
-            }
+            builder = builder.add_source(File::with_name(path).required(true));
         } else {
             for loc in default_config_locations() {
-                if let Ok(c) = Self::from_file(&loc) {
-                    cfg.merge(c);
-                    break;
-                }
+                builder = builder.add_source(File::with_name(&loc).required(false));
             }
         }
 
-        // 2. Environment variables
-        cfg.merge(Self::from_env());
+        builder = builder.add_source(
+            Environment::with_prefix("AGENTRETE").separator("__").try_parsing(true),
+        );
 
-        // 3. CLI args
+        let mut cfg: Self = builder
+            .build()
+            .and_then(|c| c.try_deserialize())
+            .unwrap_or_default();
+
         if let Some(port) = cli_port {
             cfg.port = port;
         }
@@ -190,139 +185,6 @@ impl Config {
         cfg
     }
 
-    fn from_file(path: &str) -> Result<Config, Box<dyn std::error::Error>> {
-        let content = std::fs::read_to_string(path)?;
-        let cfg = if path.ends_with(".yaml") || path.ends_with(".yml") {
-            serde_yaml::from_str(&content)?
-        } else if path.ends_with(".json") {
-            serde_json::from_str(&content)?
-        } else {
-            toml::from_str(&content)?
-        };
-        Ok(cfg)
-    }
-
-    fn from_env() -> Config {
-        let backend = match std::env::var("AGENTRETE_EMBED_BACKEND").ok().as_deref() {
-            Some("none") | Some("false") | Some("0") => EmbeddingBackend::None,
-            Some("remote") => EmbeddingBackend::Remote,
-            _ => EmbeddingBackend::Local,
-        };
-
-        Config {
-            port: std::env::var("AGENTRETE_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
-            embedding: EmbeddingConfig {
-                backend,
-                model_id: std::env::var("AGENTRETE_MODEL_ID").ok().unwrap_or_default(),
-                revision: std::env::var("AGENTRETE_MODEL_REVISION")
-                    .ok()
-                    .unwrap_or_default(),
-                dims: std::env::var("AGENTRETE_EMBED_DIMS")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(0),
-                hf_endpoint: std::env::var("HF_ENDPOINT").ok().unwrap_or_default(),
-                remote_url: std::env::var("AGENTRETE_REMOTE_URL").ok(),
-                remote_api_key: std::env::var("AGENTRETE_REMOTE_API_KEY").ok(),
-                remote_model: std::env::var("AGENTRETE_REMOTE_MODEL").ok(),
-                remote_vendor: std::env::var("AGENTRETE_REMOTE_VENDOR").ok().map(|v| {
-                    match v.to_lowercase().as_str() {
-                        "ollama" => RemoteVendor::Ollama,
-                        "anthropic" => RemoteVendor::Anthropic,
-                        _ => RemoteVendor::OpenAI,
-                    }
-                }),
-            },
-            db_dir: std::env::var("AGENTRETE_DB_DIR").ok().map(PathBuf::from),
-            cache_dir: std::env::var("AGENTRETE_CACHE_DIR").ok().map(PathBuf::from),
-        }
-    }
-
-    fn merge(&mut self, other: Config) {
-        if other.port != 0 {
-            self.port = other.port;
-        }
-
-        // Embedding config: merge non-zero/non-empty fields
-        if other.embedding.backend != EmbeddingBackend::Local {
-            self.embedding.backend = other.embedding.backend;
-        }
-        if !other.embedding.model_id.is_empty() {
-            self.embedding.model_id = other.embedding.model_id;
-        }
-        if !other.embedding.revision.is_empty() && other.embedding.revision != "main" {
-            self.embedding.revision = other.embedding.revision;
-        }
-        if other.embedding.dims != 0 {
-            self.embedding.dims = other.embedding.dims;
-        }
-        if !other.embedding.hf_endpoint.is_empty()
-            && other.embedding.hf_endpoint != default_hf_endpoint()
-        {
-            self.embedding.hf_endpoint = other.embedding.hf_endpoint;
-        }
-        if other.embedding.remote_url.is_some() {
-            self.embedding.remote_url = other.embedding.remote_url;
-        }
-        if other.embedding.remote_api_key.is_some() {
-            self.embedding.remote_api_key = other.embedding.remote_api_key;
-        }
-        if other.embedding.remote_vendor.is_some() {
-            self.embedding.remote_vendor = other.embedding.remote_vendor;
-        }
-        if other.embedding.remote_model.is_some() {
-            self.embedding.remote_model = other.embedding.remote_model;
-        }
-
-        if other.db_dir.is_some() {
-            self.db_dir = other.db_dir;
-        }
-        if other.cache_dir.is_some() {
-            self.cache_dir = other.cache_dir;
-        }
-    }
-
-    // ─── Convenience accessors ───────────────────────────────────────────────
-
-    /// Whether embedding is disabled (backend = none).
-    #[allow(dead_code)]
-    pub fn embed_enabled(&self) -> bool {
-        self.embedding.backend != EmbeddingBackend::None
-    }
-
-    /// Whether using remote embeddings API.
-    #[allow(dead_code)]
-    pub fn embed_is_remote(&self) -> bool {
-        self.embedding.backend == EmbeddingBackend::Remote
-    }
-
-    /// Resolve remote vendor: explicit config first, auto-detect from URL as fallback.
-    #[allow(dead_code)]
-    pub fn remote_vendor(&self) -> RemoteVendor {
-        self.embedding.remote_vendor.unwrap_or_else(|| {
-            self.embedding
-                .remote_url
-                .as_deref()
-                .map(RemoteVendor::detect)
-                .unwrap_or_default()
-        })
-    }
-
-    /// The effective embedding model ID (remote_model for remote, model_id for local).
-    #[allow(dead_code)]
-    pub fn effective_model_id(&self) -> String {
-        if self.embed_is_remote() {
-            self.embedding
-                .remote_model
-                .clone()
-                .unwrap_or_else(|| self.embedding.model_id.clone())
-        } else {
-            self.embedding.model_id.clone()
-        }
-    }
 
     pub fn db_dir(&self) -> PathBuf {
         self.db_dir.clone().unwrap_or_else(|| {
@@ -372,8 +234,8 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.port, 9092);
         assert_eq!(cfg.embedding.backend, EmbeddingBackend::Local);
-        assert_eq!(cfg.embedding.model_id, "moka-ai/m3e-base");
-        assert_eq!(cfg.embedding.dims, 768);
+        assert_eq!(cfg.embedding.local.model, "moka-ai/m3e-base");
+        assert_eq!(cfg.embedding.local.dims, 768);
     }
 
     #[test]
@@ -383,19 +245,20 @@ port = 9092
 
 [embedding]
 backend = "remote"
-remote_url = "https://api.openai.com/v1"
-remote_api_key = "sk-xxx"
-remote_model = "qwen3-embedding:latest"
+[embedding.remote]
+url = "https://api.openai.com/v1"
+api_key = "sk-xxx"
+model = "qwen3-embedding:latest"
 dims = 1536
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.embedding.backend, EmbeddingBackend::Remote);
-        assert_eq!(cfg.embedding.dims, 1536);
+        assert_eq!(cfg.embedding.local.dims, 1536);
         assert_eq!(
-            cfg.embedding.remote_url.as_deref(),
+            cfg.embedding.remote.url.as_deref(),
             Some("https://api.openai.com/v1")
         );
-        assert_eq!(cfg.remote_vendor(), RemoteVendor::OpenAI);
+        assert_eq!(cfg.remote.vendor(), RemoteVendor::OpenAI);
     }
 
     #[test]
@@ -403,12 +266,13 @@ dims = 1536
         let toml_str = r#"
 [embedding]
 backend = "remote"
-remote_url = "http://192.168.6.9:11434"
-remote_vendor = "ollama"
-remote_model = "granite-embedding:278m"
+[embedding.remote]
+url = "http://192.168.6.9:11434"
+vendor = "ollama"
+model = "granite-embedding:278m"
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.remote_vendor(), RemoteVendor::Ollama);
+        assert_eq!(cfg.remote.vendor(), RemoteVendor::Ollama);
     }
 
     #[test]
@@ -416,11 +280,12 @@ remote_model = "granite-embedding:278m"
         let toml_str = r#"
 [embedding]
 backend = "remote"
-remote_url = "https://api.anthropic.com"
-remote_model = "voyage-3"
+[embedding.remote]
+url = "https://api.anthropic.com"
+model = "voyage-3"
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.remote_vendor(), RemoteVendor::Anthropic);
+        assert_eq!(cfg.remote.vendor(), RemoteVendor::Anthropic);
     }
 
     #[test]
@@ -443,8 +308,8 @@ embedding:
   dims: 512
 "#;
         let cfg: Config = serde_yaml::from_str(yaml_str).unwrap();
-        assert_eq!(cfg.embedding.model_id, "BAAI/bge-small-zh-v1.5");
-        assert_eq!(cfg.embedding.dims, 512);
+        assert_eq!(cfg.embedding.local.model, "BAAI/bge-small-zh-v1.5");
+        assert_eq!(cfg.embedding.local.dims, 512);
     }
 
     #[test]
@@ -460,7 +325,7 @@ embedding:
         std::env::set_var("AGENTRETE_EMBED_DIMS", "1024");
         let env = Config::from_env();
         assert_eq!(env.embedding.backend, EmbeddingBackend::None);
-        assert_eq!(env.embedding.dims, 1024);
+        assert_eq!(env.embedding.local.dims, 1024);
         std::env::remove_var("AGENTRETE_EMBED_BACKEND");
         std::env::remove_var("AGENTRETE_EMBED_DIMS");
     }

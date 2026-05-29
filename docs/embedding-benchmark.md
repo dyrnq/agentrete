@@ -46,3 +46,28 @@ Benchmarked on 6 Chinese/English mixed texts (zh_rule, en_rule, zh_build, en_bui
 | Balanced (default) | `granite-embedding:278m` |
 | Best accuracy, have GPU | `qwen3-embedding:latest` |
 | Lots of noise to filter | `nomic-embed-text-v2-moe` |
+
+## Local Model: bge-small-zh-v1.5 (Verified)
+
+| Model | Dims | Size | Load Time | 8-batch Time | Verdict |
+|-------|------|------|-----------|-------------|---------|
+| **bge-small-zh-v1.5** | 512 | 93MB | ~1s | ~0.5s | ✅ **Tested working** — fast, lightweight, good Chinese |
+
+Tested with `backend = "local"`, `model_id = "BAAI/bge-small-zh-v1.5"`, `dims = 512`.
+
+- **Pros**: Small (93MB), fast load, good Chinese semantics, 512d is sufficient for memory search.
+- **Cons**: CPU-only candle inference; batch size 8 recommended (BERT 512d ~0.5s/batch).
+- **Best for**: Local-only deployments, <1000 memories, no GPU needed.
+
+**Config**:
+```toml
+[embedding]
+backend = "local"
+model_id = "BAAI/bge-small-zh-v1.5"
+revision = "main"
+dims = 512
+```
+
+**Note**: Switching from a remote model to a local model triggers automatic recompute of
+all stored vectors (`embedding_model IS NOT ?` matches old model name). For large databases
+(>1000 rows), prefer remote API models for faster recompute speed.

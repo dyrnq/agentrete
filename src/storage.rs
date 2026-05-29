@@ -60,7 +60,8 @@ impl Store {
         sqlx::query("INSERT INTO memories (id,type,content,tags,files,project,importance,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)")
             .bind(&id).bind(&input.memory_type).bind(&input.content).bind(&tags).bind(&files).bind(&input.project).bind(0.5).bind(&now)
             .execute(&self.pool).await?;
-        let rowid: i64 = sqlx::query_scalar("SELECT last_insert_rowid()")
+        let rowid: i64 = sqlx::query_scalar("SELECT rowid FROM memories WHERE id=?1")
+            .bind(&id)
             .fetch_one(&self.pool)
             .await?;
         sqlx::query("INSERT INTO memories_fts(rowid,content) VALUES (?1,?2)")
@@ -194,6 +195,12 @@ impl Store {
         let texts: Vec<&str> = rows.iter().map(|(_, c)| c.as_str()).collect();
 
         let vectors = embedder.embed_batch(&texts).await?;
+        eprintln!(
+            "embed_pending: got {} vectors, dim={} from model={}",
+            vectors.len(),
+            vectors.first().map(|v| v.len()).unwrap_or(0),
+            model_name
+        );
         if vectors.len() != rows.len() {
             anyhow::bail!(
                 "embed_batch returned {} vectors for {} inputs",

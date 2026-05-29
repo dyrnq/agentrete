@@ -25,29 +25,26 @@ impl Embedder {
                 Ok(Embedder::Local(Box::new(std::sync::Mutex::new(model))))
             }
             crate::config::EmbeddingBackend::Remote => {
-                let url = cfg.remote_url.as_deref().ok_or_else(|| {
+                let url = &cfg.remote.url.as_deref().ok_or_else(|| {
                     anyhow::anyhow!("remote_url is required for remote embedding")
                 })?;
-                let model = cfg
-                    .remote_model
+                let model = &cfg.remote.model
                     .as_deref()
                     .unwrap_or("qwen3-embedding:latest");
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(300))
                     .build()?;
-                let vendor = cfg
-                    .remote_vendor
+                let vendor = &cfg.remote.vendor
                     .unwrap_or_else(|| RemoteVendor::detect(url));
                 Ok(match vendor {
                     RemoteVendor::OpenAI => Embedder::OpenAI(OpenAIEmbedder::new(
                         url,
-                        cfg.remote_api_key.as_deref(),
+                        cfg.remote.api_key.as_deref(),
                         model,
                         client,
                     )),
                     RemoteVendor::Anthropic => {
-                        let key = cfg
-                            .remote_api_key
+                        let key = &cfg.remote.api_key
                             .as_deref()
                             .ok_or_else(|| anyhow::anyhow!("Anthropic requires an API key"))?;
                         Embedder::Anthropic(AnthropicEmbedder::new(url, key, model, client))

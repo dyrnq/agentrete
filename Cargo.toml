@@ -32,6 +32,7 @@ rmcp = "1.7.0"
 dirs = "6.0.0"
 axum = { version = "0.8.9", features = ["macros"] }
 tikv-jemallocator = "0.7.0"
+config = { version = "0.15.20", features = ["toml", "yaml", "json"] }
 
 [dev-dependencies]
 tempfile = "3"

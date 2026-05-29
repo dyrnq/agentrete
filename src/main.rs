@@ -385,15 +385,14 @@ Status: ✅ agentrete is healthy"
         Commands::Setup => unreachable!(),
         Commands::Mcp { port } => {
             // Spawn embed worker in background if embedding is enabled
-            let embed_handle = if cfg.embed_enabled() {
+            let embed_handle = if cfg.embedding.backend != crate::config::EmbeddingBackend::None {
                 let embedder = crate::embed::embeddings::Embedder::from_config(&cfg.embedding)?;
                 let store2 = store.clone();
                 let model = cfg
-                    .embedding
-                    .remote_model
+                    .embedding.remote.model
                     .clone()
                     .unwrap_or_else(|| "unknown".to_string());
-                let dims = cfg.embedding.dims as usize;
+                let dims = cfg.embedding.local.dims as usize;
                 Some(tokio::spawn(async move {
                     eprintln!("embed-worker: started (model={model}, dims={dims})");
                     loop {
