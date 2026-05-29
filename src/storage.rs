@@ -45,11 +45,8 @@ impl Store {
             _ => "ext/vec0.so",
         };
         let ext_so = std::env::current_dir().unwrap_or_default().join(ext_name);
-        if ext_so.exists() {
-            let ext_path = ext_so.to_string_lossy().to_string();
-            opts = opts.extension(ext_path.clone());
-            log::info!("sqlite-vec extension loaded from {ext_path}");
-        }
+        // FIXME: sqlx pool worker crashes with extension() — disable for now
+        // if ext_so.exists() { ... extension loading ... }
 
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
         sqlx::query("PRAGMA journal_mode=WAL")
@@ -62,7 +59,7 @@ impl Store {
             .execute(&pool)
             .await?;
 
-        let vec_enabled = ext_so.exists();
+        let vec_enabled = false; // sqlite-vec disabled until sqlx pool bug is fixed
         let store = Self {
             pool,
             path,
