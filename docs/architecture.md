@@ -241,7 +241,7 @@ No hooks fail due to missing runtime dependencies.
 
 ## Key Design Decisions
 
-1. **SQLite + sqlx over DuckDB**: Pure Rust async, no `!Sync` issues, axum compatible, simpler deployment
+1. **SQLite + sqlx**: Pure Rust async, connection pool, WAL mode: Pure Rust async, no `!Sync` issues, axum compatible, simpler deployment
 2. **FTS5 over vector search as primary**: BM25 keyword match is fast, sufficient for structured memory; embedding vectors are computed asynchronously as secondary signal
 3. **Embed worker, not inline**: Save never blocks on embedding API call; background poll-loop batched Ollama 500 at a time
 4. **Partial index on NULL**: `CREATE INDEX ... WHERE embedding IS NULL` — only pending rows indexed

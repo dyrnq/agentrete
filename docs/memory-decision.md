@@ -58,10 +58,10 @@ Codex judges whether information is worth long-term storage based on conversatio
 | type | Content | Example |
 |------|---------|---------|
 | `rule` | Development standards, coding preferences | "Never use sed to modify code" |
-| `decision` | Architecture decisions, technology choices | "Choose m3e-base as default model" |
-| `pattern` | Recurring problem patterns | "libduckdb-sys compile slow, need opt-level=3" |
+| `decision` | Architecture decisions, technology choices | "Choose bge-small-zh-v1.5 as local model" |
+| `pattern` | Recurring problem patterns | "sqlx SQLite WAL mode for concurrent reads" |
 | `fact` | Key environment information | "Project needs HF_ENDPOINT mirror" |
-| `bug` | Fixed bug records | "DuckDB FLOAT[] type mismatch issue" |
+| `bug` | Fixed bug records | "last_insert_rowid() unreliable with sqlx pool" |
 
 **Do NOT auto-save**:
 

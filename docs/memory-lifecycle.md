@@ -22,16 +22,16 @@ Core goal: **Let AI remember your preferences, project technical decisions, and 
 ┌──────────────────────────────────────────────────────┐
 │                  agentrete MCP Server                 │
 │                                                      │
-│  actix-web                                            │
+│  axum                                            │
 │  ┌─────────┐  ┌─────────┐       ┌──────────────┐    │
-│  │ memory_  │  │ memory_  │       │  DuckDB      │    │
+│  │ memory_  │  │ memory_  │       │  SQLite      │    │
 │  │ search   │  │ save     │ ─────→│  • memories  │    │
 │  │ list     │  │ stats    │       └──────┬───────┘    │
 │  └─────────┘  └─────────┘              │            │
 │                                         │            │
 │  ┌──────────────────────────────────────┘            │
-│  │  Embedding model (m3e-base, 768d, 391MB)         │
-│  │  text → vector → list_cosine_similarity           │
+│  │  Embedding model (bge-small-zh-v1.5, 512d, 93MB)         │
+│  │  text → vector → FTS5 BM25           │
 │  └───────────────────────────────────────────────────┘
 └──────────────────────────────────────────────────────┘
 ```
@@ -71,7 +71,7 @@ User says "remember xxx"
 
 ## 2. Storing Memories
 
-Each memory is stored in DuckDB with structure:
+Each memory is stored in SQLite with structure:
 
 ```sql
 CREATE TABLE memories (
@@ -81,8 +81,8 @@ CREATE TABLE memories (
     tags            VARCHAR[],               -- ["rust","compilation"]
     project         VARCHAR,                 -- project name
     importance      FLOAT DEFAULT 0.5,
-    embedding       FLOAT[],                 -- 768d vector (m3e-base model)
-    embedding_model VARCHAR,                 -- "m3e-base"
+    embedding       BLOB,                 -- 768d vector (bge-small-zh-v1.5 model)
+    embedding_model VARCHAR,                 -- "bge-small-zh-v1.5"
     embedding_dims  INTEGER,                 -- 768
     created_at      TIMESTAMP,
     updated_at      TIMESTAMP
@@ -90,8 +90,8 @@ CREATE TABLE memories (
 ```
 
 **On write**:
-1. text → candle loads m3e-base → 768-dim vector
-2. DuckDB INSERT INTO memories
+1. text → candle loads bge-small-zh-v1.5 → 512-dim vector
+2. SQLite INSERT INTO memories
 
 ## 3. Searching Memories
 
@@ -103,7 +103,7 @@ Search "coding standards"
   ├─ Phase 1: BM25 FTS (keyword match)
   │   └─ Finds records containing "coding" 
   │
-  ├─ Phase 2: Vector semantic search (list_cosine_similarity)
+  ├─ Phase 2: Vector semantic search (FTS5 BM25)
   │   ├─ query text → embedding 768d vector
   │   ├─ cosine similarity against each memory
   │   └─ Finds semantically similar records
@@ -147,20 +147,20 @@ Session 1                    Session 2 (new project, new instance)
 
 | Component | Choice | Reason |
 |-----------|--------|--------|
-| Database | DuckDB | Embedded OLAP, SQL-friendly, native FLOAT[] |
-| Vector search | `list_cosine_similarity` | DuckDB built-in, no extensions |
-| Full-text search | FTS (BM25) | DuckDB built-in |
-| Embedding model | m3e-base | Good Chinese semantics, 768d, 391MB |
-| HTTP framework | actix-web | Actor model, avoids DuckDB `!Sync` issues |
+| Database | SQLite | Embedded OLAP, SQL-friendly, native BLOB |
+| Vector search | `FTS5 BM25` | SQLite built-in, no extensions |
+| Full-text search | FTS (BM25) | SQLite built-in |
+| Embedding model | bge-small-zh-v1.5 | Good Chinese semantics, 768d, 391MB |
+| HTTP framework | axum | Actor model, avoids SQLite `!Sync` issues |
 | MCP protocol | Hand-written JSON-RPC | Streamable HTTP 2025-11-25 compliant |
 | Hooks | bash + curl / PowerShell | Codex & Claude hook mechanisms |
 
 ## 7. File Layout
 
 ```
-$HOME/.agentrete/memory.db              ← DuckDB data file
+$HOME/.agentrete/memory.db              ← SQLite data file
 $HOME/.cache/huggingface/hub/           ← Model cache
-  models--moka-ai--m3e-base/
+  models--moka-ai--bge-small-zh-v1.5/
     snapshots/main/model.safetensors      ← 391MB
 
 $HOME/.codex/
