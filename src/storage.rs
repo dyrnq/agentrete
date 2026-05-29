@@ -4,18 +4,21 @@ use anyhow::Result;
 use chrono::Utc;
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
+use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::embed::embeddings::Embedder;
 use crate::types::{DbStats, Memory, NewMemory, SearchResult};
 
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
     path: PathBuf,
+    embedder: Option<Arc<Embedder>>,
 }
 
 impl Store {
-    pub async fn open(cfg: &crate::config::Config) -> Result<Self> {
+    pub async fn open(cfg: &crate::config::Config, embedder: Option<Embedder>) -> Result<Self> {
         let path = cfg.db_dir().join("memory.db");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -31,7 +34,11 @@ impl Store {
         sqlx::query("PRAGMA busy_timeout=5000")
             .execute(&pool)
             .await?;
-        let store = Self { pool, path };
+        let store = Self {
+            pool,
+            path,
+            embedder: embedder.map(Arc::new),
+        };
         store.initialize().await?;
         Ok(store)
     }
@@ -73,7 +80,21 @@ impl Store {
         Ok(id)
     }
 
+    /// Search — auto-selects hybrid if embedder is available, falls back to FTS5.
     pub async fn search(
+        &self,
+        query: &str,
+        limit: u8,
+        memory_type: Option<&str>,
+    ) -> Result<Vec<SearchResult>> {
+        if let Some(ref emb) = self.embedder {
+            return self.search_hybrid(emb, query, limit, memory_type).await;
+        }
+        self.search_fts(query, limit, memory_type).await
+    }
+
+    /// FTS5-only keyword search.
+    async fn search_fts(
         &self,
         query: &str,
         limit: u8,
@@ -102,6 +123,81 @@ impl Store {
                 embedding: r.embedding,
             })
             .collect())
+    }
+
+    /// Hybrid search: FTS5 recall + cosine rerank with query embedding.
+    pub async fn search_hybrid(
+        &self,
+        embedder: &crate::embed::embeddings::Embedder,
+        query: &str,
+        limit: u8,
+        memory_type: Option<&str>,
+    ) -> Result<Vec<SearchResult>> {
+        // Step 1: Get query embedding from local/remote model
+        let query_vec = embedder.embed_one(query).await?;
+
+        // Step 2: FTS5 recall (wider window for reranking)
+        let recall_limit = (limit as i64 * 3).min(100);
+        let rows: Vec<SearchRow> = if let Some(t) = memory_type {
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 ORDER BY rank LIMIT ?3")
+                .bind(query).bind(t).bind(recall_limit).fetch_all(&self.pool).await?
+        } else {
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2")
+                .bind(query).bind(recall_limit).fetch_all(&self.pool).await?
+        };
+
+        // Step 3: Cosine rerank (only rows with embeddings)
+        let mut results: Vec<SearchResult> = Vec::new();
+        let mut bm25_only: Vec<SearchResult> = Vec::new();
+
+        for r in rows {
+            if let Some(ref emb) = r.embedding {
+                if let Some(emb_vec) = bytes_to_f32_vec(emb) {
+                    let cosine = cosine_similarity(&query_vec, &emb_vec);
+                    results.push(SearchResult {
+                        id: r.id,
+                        memory_type: r.memory_type,
+                        content: r.content,
+                        tags: parse_json(&r.tags),
+                        files: parse_json(&r.files),
+                        project: r.project,
+                        importance: r.importance.unwrap_or(0.5),
+                        score: cosine as f64,
+                        created_at: r.created_at.unwrap_or_default(),
+                        embedding: Some(emb.clone()),
+                    });
+                    continue;
+                }
+            }
+            // Fallback: BM25-only (no embedding yet)
+            bm25_only.push(SearchResult {
+                id: r.id,
+                memory_type: r.memory_type,
+                content: r.content,
+                tags: parse_json(&r.tags),
+                files: parse_json(&r.files),
+                project: r.project,
+                importance: r.importance.unwrap_or(0.5),
+                score: 0.5,
+                created_at: r.created_at.unwrap_or_default(),
+                embedding: r.embedding.clone(),
+            });
+        }
+
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit as usize);
+
+        // Append BM25-only results for padding
+        if results.len() < limit as usize {
+            let remaining = limit as usize - results.len();
+            results.extend(bm25_only.into_iter().take(remaining));
+        }
+
+        Ok(results)
     }
 
     pub async fn list(&self, limit: u8) -> Result<Vec<Memory>> {
@@ -265,6 +361,34 @@ struct MemoryRow {
     importance: Option<f64>,
     created_at: Option<String>,
     updated_at: Option<String>,
+}
+
+// ─── Vector math ─────────────────────────────────────────────────────────────
+
+fn bytes_to_f32_vec(bytes: &[u8]) -> Option<Vec<f32>> {
+    if bytes.len() % 4 != 0 {
+        return None;
+    }
+    Some(
+        bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect(),
+    )
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let (dot, na, nb) = a
+        .iter()
+        .zip(b.iter())
+        .fold((0.0f32, 0.0f32, 0.0f32), |(d, na, nb), (&x, &y)| {
+            (d + x * y, na + x * x, nb + y * y)
+        });
+    let denom = (na.sqrt() * nb.sqrt()).max(1e-10);
+    (dot / denom).clamp(-1.0, 1.0)
 }
 
 fn parse_json(val: &Option<String>) -> Option<Vec<String>> {

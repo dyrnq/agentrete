@@ -289,7 +289,12 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> {
-    let store = storage::Store::open(&cfg).await?;
+    let embedder = if cfg.embedding.backend != crate::config::EmbeddingBackend::None {
+        crate::embed::embeddings::Embedder::from_config(&cfg.embedding).ok()
+    } else {
+        None
+    };
+    let store = storage::Store::open(&cfg, embedder).await?;
 
     match cli.command {
         Commands::Save {
@@ -418,7 +423,7 @@ Status: ✅ agentrete is healthy"
                     })
                     .await?;
                 nc += 1;
-                                let preview: String = content.chars().take(60).collect();
+                let preview: String = content.chars().take(60).collect();
                 println!("  NEW  {preview}");
             }
             println!("Done: {nc} new, {sc} skipped.");
