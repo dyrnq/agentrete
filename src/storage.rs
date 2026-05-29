@@ -44,7 +44,13 @@ impl Store {
             ("windows", "x86_64") => "ext/vec0-windows-x86_64.dll",
             _ => "ext/vec0.so",
         };
-        let ext_so = std::env::current_dir().unwrap_or_default().join(ext_name);
+        // Resolve extension path relative to the binary location
+        let ext_so = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_default()
+            .join("..").join("..")
+            .join(ext_name);
         // FIXME: sqlx pool worker crashes with extension() — disable for now
         // if ext_so.exists() { ... extension loading ... }
 
@@ -59,7 +65,7 @@ impl Store {
             .execute(&pool)
             .await?;
 
-        let vec_enabled = false; // sqlite-vec disabled until sqlx pool bug is fixed
+        let vec_enabled = ext_so.exists(); // sqlite-vec disabled until sqlx pool bug is fixed
         let store = Self {
             pool,
             path,
@@ -662,3 +668,4 @@ fn parse_json(val: &Option<String>) -> Option<Vec<String>> {
         _ => None,
     }
 }
+
