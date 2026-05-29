@@ -11,6 +11,12 @@ use uuid::Uuid;
 use crate::embed::embeddings::Embedder;
 use crate::types::{DbStats, Memory, NewMemory, SearchResult};
 
+// Embedded sqlite-vec extension for the current platform.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const VEC_EXT_BYTES: &[u8] = include_bytes!("../ext/vec0-linux-x86_64.so");
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+const VEC_EXT_BYTES: &[u8] = &[];
+
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
@@ -49,7 +55,8 @@ impl Store {
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_default()
-            .join("..").join("..")
+            .join("..")
+            .join("..")
             .join(ext_name);
         // FIXME: sqlx pool worker crashes with extension() — disable for now
         // if ext_so.exists() { ... extension loading ... }
@@ -138,12 +145,9 @@ impl Store {
     ) -> Result<Vec<SearchResult>> {
         let mut query_vec = query_vec_orig.to_vec();
         normalize_l2(&mut query_vec);
-        let query_vec = query_vec; // rebind as &[f32]
-        limit: u8,
-        memory_type: Option<&str>,
-    ) -> Result<Vec<SearchResult>> {
+        let query_vec = query_vec.as_slice();
         let dims = query_vec.len();
-        let json_vec: String = serde_json::to_string(query_vec)?;
+        let json_vec: String = serde_json::to_string(&query_vec)?;
         let lim = limit.min(50) as i64;
 
         // KNN via vec0 virtual table
@@ -653,7 +657,6 @@ fn normalize_l2(v: &mut [f32]) {
     }
 }
 
-
 fn bytes_to_f32_vec(bytes: &[u8]) -> Option<Vec<f32>> {
     if bytes.len() % 4 != 0 {
         return None;
@@ -686,4 +689,3 @@ fn parse_json(val: &Option<String>) -> Option<Vec<String>> {
         _ => None,
     }
 }
-
