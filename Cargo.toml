@@ -33,6 +33,7 @@ dirs = "6.0.0"
 axum = { version = "0.8.9", features = ["macros"] }
 tikv-jemallocator = "0.7.0"
 config = { version = "0.15.20", features = ["toml", "yaml", "json"] }
+sqlite-vec = "0.1.9"
 
 [dev-dependencies]
 tempfile = "3"

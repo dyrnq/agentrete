@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use chrono::Utc;
-use sqlx::sqlite::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -15,6 +15,7 @@ pub struct Store {
     pool: SqlitePool,
     path: PathBuf,
     embedder: Option<Arc<Embedder>>,
+    vec_enabled: bool,
 }
 
 impl Store {
@@ -23,8 +24,21 @@ impl Store {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let db_url = format!("sqlite:{}?mode=rwc", path.display());
-        let pool = SqlitePool::connect(&db_url).await?;
+        let mut opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true);
+
+        let ext_so = std::env::current_dir()
+            .unwrap_or_default()
+            .join("ext/vec0.so");
+        if ext_so.exists() {
+            let ext_path = ext_so.to_string_lossy().to_string();
+            opts = opts.extension(ext_path.clone());
+            eprintln!("sqlite-vec extension loaded from {ext_path}");
+        }
+
+        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
         sqlx::query("PRAGMA journal_mode=WAL")
             .execute(&pool)
             .await?;
@@ -34,11 +48,17 @@ impl Store {
         sqlx::query("PRAGMA busy_timeout=5000")
             .execute(&pool)
             .await?;
+
+        let vec_enabled = ext_so.exists();
         let store = Self {
             pool,
             path,
             embedder: embedder.map(Arc::new),
+            vec_enabled,
         };
+        if vec_enabled {
+            store.init_vec().await?;
+        }
         store.initialize().await?;
         Ok(store)
     }
@@ -78,6 +98,60 @@ impl Store {
             .await?;
         // embedding=NULL — embed-worker picks it up later
         Ok(id)
+    }
+
+    async fn init_vec(&self) -> Result<()> {
+        sqlx::query(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
+                embedding float[768]
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// sqlite-vec KNN search. Falls back to FTS5 if vec extension not loaded.
+    pub async fn search_vec(
+        &self,
+        query_vec: &[f32],
+        limit: u8,
+        memory_type: Option<&str>,
+    ) -> Result<Vec<SearchResult>> {
+        let dims = query_vec.len();
+        let json_vec: String = serde_json::to_string(query_vec)?;
+        let lim = limit.min(50) as i64;
+
+        // KNN via vec0 virtual table
+        let rows: Vec<(String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<f64>, Option<String>, f64)> =
+            sqlx::query_as(
+                "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid                  WHERE v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
+            )
+            .bind(&json_vec)
+            .bind(lim)
+            .bind(lim)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(id, mt, content, tags, files, project, importance, created_at, distance)| {
+                    SearchResult {
+                        id,
+                        memory_type: mt,
+                        content,
+                        tags: parse_json(&tags),
+                        files: parse_json(&files),
+                        project,
+                        importance: importance.unwrap_or(0.5),
+                        score: 1.0 - distance as f64,
+                        created_at: created_at.unwrap_or_default(),
+                        embedding: None,
+                    }
+                },
+            )
+            .collect())
     }
 
     /// Search — auto-selects hybrid if embedder is available, falls back to FTS5.
