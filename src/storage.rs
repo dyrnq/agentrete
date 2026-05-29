@@ -173,20 +173,35 @@ impl Store {
         if self.vec_enabled {
             if let Some(ref emb) = self.embedder {
                 if let Ok(query_vec) = emb.embed_one(query).await {
-                    if let Ok(results) = self.search_vec(&query_vec, limit, memory_type).await {
-                        if !results.is_empty() {
+                    match self.search_vec(&query_vec, limit, memory_type).await {
+                        Ok(results) if !results.is_empty() => {
+                            eprintln!(
+                                "search: vec0 KNN hit ({} results, top score={:.3})",
+                                results.len(),
+                                results.first().map(|r| r.score).unwrap_or(0.0)
+                            );
                             return Ok(results);
                         }
+                        Ok(_) => eprintln!("search: vec0 KNN empty, falling back to hybrid"),
+                        Err(e) => eprintln!("search: vec0 KNN error ({e}), falling back to hybrid"),
                     }
                 }
             }
         }
         // Fallback: hybrid (cosine rerank) if embedder is available
         if let Some(ref emb) = self.embedder {
-            return self.search_hybrid(emb, query, limit, memory_type).await;
+            let results = self.search_hybrid(emb, query, limit, memory_type).await?;
+            eprintln!(
+                "search: hybrid cosine ({} results, top score={:.3})",
+                results.len(),
+                results.first().map(|r| r.score).unwrap_or(0.0)
+            );
+            return Ok(results);
         }
         // Final fallback: FTS5 BM25 only
-        self.search_fts(query, limit, memory_type).await
+        let results = self.search_fts(query, limit, memory_type).await?;
+        eprintln!("search: FTS5 BM25-only ({} results)", results.len());
+        Ok(results)
     }
 
     /// FTS5-only keyword search.
