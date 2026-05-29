@@ -16,9 +16,11 @@ const DEFAULT_PORT: u16 = 9092;
 pub enum EmbeddingBackend {
     /// No embedding — BM25 FTS only.
     None,
-    /// Local on-device model (candle + HuggingFace model).
+    /// Local on-device model (candle BERT).
     #[default]
     Local,
+    /// Model2Vec static embeddings — distilled sentence-transformers, 10MB, ultra-fast CPU.
+    Model2Vec,
     /// Remote API (URL auto-detects vendor: OpenAI/Anthropic/Ollama).
     Remote,
 }
@@ -69,7 +71,7 @@ pub struct RemoteConfig {
     pub dims: Option<u16>,
 }
 
-/// Local model sub-config (TOML: [embedding.local]).
+/// Local model sub-config (TOML: [embedding.local] or [embedding.model2vec]).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LocalConfig {
     #[serde(default = "default_model_id")]
@@ -78,6 +80,10 @@ pub struct LocalConfig {
     pub revision: String,
     #[serde(default = "default_dims")]
     pub dims: u16,
+    /// Path to pre-distilled model2vec directory (for backend = "model2vec").
+    /// If empty, uses model field to find source sentence-transformers model.
+    #[serde(default)]
+    pub model2vec_path: Option<String>,
     #[serde(default = "default_hf_endpoint")]
     pub endpoint: String,
 }
@@ -111,7 +117,11 @@ impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
             backend: EmbeddingBackend::Local,
-            local: LocalConfig::default(),
+            local: LocalConfig {
+                model: "BAAI/bge-small-zh-v1.5".to_string(),
+                dims: 512,
+                ..Default::default()
+            },
             remote: RemoteConfig::default(),
         }
     }

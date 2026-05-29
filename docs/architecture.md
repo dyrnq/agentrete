@@ -245,3 +245,50 @@ No hooks fail due to missing runtime dependencies.
 8. **Version-negotiated MCP**: Clean separation per protocol version (2024-11-05, 2025-06-18, 2025-11-25), easy to add future versions.
 9. **Hooks embedded at compile time**: All scripts via `include_str!()`, no external files needed at deploy time.
 10. **jemalloc**: Faster memory allocation for long-running server processes.
+
+## Model2Vec Backend (NEW)
+
+Model2Vec is a static embedding approach that distills sentence-transformers into compact,
+ultra-fast lookup tables. No GPU needed — runs entirely on CPU at ~0.1ms per text.
+
+| Property | Value |
+|----------|-------|
+| Model size | **10MB** (vs 93MB for candle BERT) |
+| Load time | **0.9s** |
+| Encode speed | **0.17ms/text** (1000x faster than candle, 100x faster than Ollama) |
+| Dimension | 256d (configurable, depends on source model) |
+| Embedding | **Inline** (computed during save, no worker needed) |
+| vec0 KNN | ✅ Supported |
+
+**How it works**: A sentence-transformers model (e.g. `BAAI/bge-small-zh-v1.5`) is distilled
+into static token embeddings via `model2vec.distill()`. The resulting files
+(tokenizer.json + model.safetensors + config.json) are loaded by `model2vec-rs`.
+Encoding is pure weighted token averaging — no neural network forward pass.
+
+**Configuration**:
+```toml
+[embedding]
+backend = "model2vec"
+
+[embedding.local]
+model = "BAAI/bge-small-zh-v1.5"
+dims = 256
+model2vec_path = "/path/to/distilled/model"
+```
+
+**Distillation** (one-time):
+```bash
+pip install model2vec[distill]
+python3 -c "
+from model2vec.distill import distill
+m = distill(model_name='BAAI/bge-small-zh-v1.5')
+m.save_pretrained('./model2vec-bge-small-zh')
+"
+```
+
+**Trade-offs**:
+- ✅ Fastest embedding backend available
+- ✅ No GPU, no network, no external service
+- ✅ Tiny model (10MB), can be embedded in binary
+- ⚠️ Lower semantic accuracy than 4096d qwen3 (~0.73 vs ~0.84)
+- ⚠️ Requires one-time distillation (30s CPU)

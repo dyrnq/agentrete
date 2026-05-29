@@ -3,12 +3,15 @@
 use crate::config::{EmbeddingConfig, RemoteVendor};
 use anyhow::Result;
 
+use super::model2vec_embed::Model2VecEmbed;
 use super::remote::anthropic::AnthropicEmbedder;
 use super::remote::ollama::OllamaEmbedder;
 use super::remote::openai::OpenAIEmbedder;
 
+#[allow(clippy::large_enum_variant)]
 pub enum Embedder {
     Local(Box<std::sync::Mutex<super::BasedBertEmbedder>>),
+    Model2Vec(Model2VecEmbed),
     OpenAI(OpenAIEmbedder),
     Anthropic(AnthropicEmbedder),
     Ollama(OllamaEmbedder),
@@ -27,6 +30,9 @@ impl Embedder {
                     .with_device_cpu()
                     .build()?;
                 Ok(Embedder::Local(Box::new(std::sync::Mutex::new(model))))
+            }
+            crate::config::EmbeddingBackend::Model2Vec => {
+                Model2VecEmbed::new(cfg).map(Embedder::Model2Vec)
             }
             crate::config::EmbeddingBackend::Remote => {
                 let url = &cfg.remote.url.as_deref().ok_or_else(|| {
@@ -76,6 +82,7 @@ impl Embedder {
             Embedder::OpenAI(e) => e.embed_batch(texts).await,
             Embedder::Anthropic(e) => e.embed_batch(texts).await,
             Embedder::Ollama(e) => e.embed_batch(texts).await,
+            Embedder::Model2Vec(ref m) => m.embed_batch(texts),
         }
     }
 
@@ -88,6 +95,7 @@ impl Embedder {
             Embedder::OpenAI(e) => e.embed(text).await,
             Embedder::Anthropic(e) => e.embed(text).await,
             Embedder::Ollama(e) => e.embed(text).await,
+            Embedder::Model2Vec(ref m) => m.embed_one(text),
         }
     }
 }
