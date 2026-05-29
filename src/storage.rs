@@ -301,13 +301,15 @@ impl Store {
     // ─── embed worker (public, called from mcp server) ──────────────────────
     /// Deduplicate memories by content+type, keeping the oldest (by created_at).
     /// Also VACUUM to reclaim disk space.
-    pub async fn compact(&self) -> Result<(usize, usize)> {
-        // Count before
+    pub async fn compact(&self, mode: &str, threshold: f32) -> Result<(usize, usize)> {
+        if mode == "semantic" {
+            return self.compact_semantic(threshold).await;
+        }
+
         let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
             .fetch_one(&self.pool)
             .await?;
 
-        // Dedup: keep MIN(rowid) per (content, type) group
         sqlx::query(
             "DELETE FROM memories WHERE rowid NOT IN (SELECT MIN(rowid) FROM memories GROUP BY content, COALESCE(type,''))",
         )
@@ -317,19 +319,92 @@ impl Store {
             .fetch_one(&self.pool)
             .await?;
 
-        // Rebuild FTS5
+        self.rebuild_fts().await?;
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+
+        Ok(((before - after) as usize, after as usize))
+    }
+
+    async fn compact_semantic(&self, threshold: f32) -> Result<(usize, usize)> {
+        let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+            .fetch_one(&self.pool)
+            .await?;
+
+        #[derive(sqlx::FromRow)]
+        struct EmbedRow {
+            id: String,
+            embedding: Vec<u8>,
+        }
+        let rows: Vec<EmbedRow> =
+            sqlx::query_as("SELECT id, embedding FROM memories WHERE embedding IS NOT NULL")
+                .fetch_all(&self.pool)
+                .await?;
+        if rows.len() < 2 {
+            return Ok((0, before as usize));
+        }
+
+        let vecs: Vec<Vec<f32>> = rows
+            .iter()
+            .filter_map(|r| bytes_to_f32_vec(&r.embedding))
+            .collect();
+        let n = vecs.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if cosine_similarity(&vecs[i], &vecs[j]) > threshold {
+                    let mut ri = i;
+                    while parent[ri] != ri {
+                        ri = parent[ri];
+                    }
+                    let mut rj = j;
+                    while parent[rj] != rj {
+                        rj = parent[rj];
+                    }
+                    if ri != rj {
+                        parent[ri] = rj;
+                    }
+                }
+            }
+        }
+
+        use std::collections::HashMap;
+        let mut groups: HashMap<usize, Vec<&str>> = HashMap::new();
+        for (i, row) in rows.iter().enumerate() {
+            let mut root = i;
+            while parent[root] != root {
+                root = parent[root];
+            }
+            groups.entry(root).or_default().push(&row.id);
+        }
+
+        for ids in groups.values() {
+            if ids.len() > 1 {
+                for id in &ids[1..] {
+                    sqlx::query("DELETE FROM memories WHERE id = ?1")
+                        .bind(id)
+                        .execute(&self.pool)
+                        .await?;
+                }
+            }
+        }
+
+        let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+            .fetch_one(&self.pool)
+            .await?;
+        self.rebuild_fts().await?;
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+        Ok(((before - after) as usize, after as usize))
+    }
+
+    async fn rebuild_fts(&self) -> Result<()> {
         sqlx::query("DELETE FROM memories_fts")
             .execute(&self.pool)
             .await?;
         sqlx::query("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories")
             .execute(&self.pool)
             .await?;
-
-        // VACUUM
-        sqlx::query("VACUUM").execute(&self.pool).await?;
-
-        let removed = (before - after) as usize;
-        Ok((removed, after as usize))
+        Ok(())
     }
 
     /// Poll for rows without embeddings and compute them via remote API.
