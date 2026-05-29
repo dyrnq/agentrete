@@ -1,0 +1,185 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: agentrete
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build (release)
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        shell: bash
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          BIN="${{ env.BINARY_NAME }}-${TAG}-${{ matrix.target }}"
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            BIN="${BIN}.exe"
+          fi
+          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}${{ contains(matrix.target, 'windows') && '.exe' || '' }} "$BIN"
+          sha256sum "$BIN" > "${BIN}.sha256"
+          echo "artifact=${BIN}" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.BINARY_NAME }}-*
+
+  release:
+    name: GitHub Release + npm publish
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f -exec cp {} release-assets/ \;
+          cd release-assets
+          sha256sum * > sha256sums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          files: release-assets/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org/
+
+      - name: Download linux binary for npm
+        shell: bash
+        run: |
+          mkdir -p npm/bin
+          cp artifacts/x86_64-unknown-linux-gnu/${{ env.BINARY_NAME }}-*-x86_64-unknown-linux-gnu npm/bin/agentrete-linux-x64
+          cp artifacts/x86_64-apple-darwin/${{ env.BINARY_NAME }}-*-x86_64-apple-darwin npm/bin/agentrete-darwin-x64 || true
+          cp artifacts/aarch64-apple-darwin/${{ env.BINARY_NAME }}-*-aarch64-apple-darwin npm/bin/agentrete-darwin-arm64 || true
+          cp artifacts/x86_64-pc-windows-msvc/${{ env.BINARY_NAME }}-*-x86_64-pc-windows-msvc.exe npm/bin/agentrete-win-x64.exe || true
+          chmod +x npm/bin/* 2>/dev/null || true
+          ls -la npm/bin/
+
+      - name: Create npm package.json
+        shell: bash
+        run: |
+          cat > npm/package.json << 'PKGJSON'
+          {
+            "name": "agentrete",
+            "version": "${{ github.ref_name }}",
+            "description": "Local-first persistent memory engine for AI coding agents",
+            "license": "MIT",
+            "bin": {
+              "agentrete": "./install.js"
+            },
+            "files": [
+              "install.js",
+              "bin/"
+            ],
+            "repository": {
+              "type": "git",
+              "url": "https://github.com/dyrnq/agentrete"
+            },
+            "keywords": ["mcp", "memory", "ai", "codex", "claude", "agent"]
+          }
+          PKGJSON
+          # Strip leading 'v' from version
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          sed -i "s/\${{ github.ref_name }}/$VERSION/" npm/package.json
+
+      - name: Create npm install.js
+        shell: bash
+        run: |
+          cat > npm/install.js << 'INSTALLJS'
+          #!/usr/bin/env node
+          const { execSync } = require('child_process');
+          const fs = require('fs');
+          const path = require('path');
+
+          const platform = process.platform;
+          const arch = process.arch;
+
+          const map = {
+            'linux-x64': 'agentrete-linux-x64',
+            'darwin-x64': 'agentrete-darwin-x64',
+            'darwin-arm64': 'agentrete-darwin-arm64',
+            'win32-x64': 'agentrete-win-x64.exe',
+          };
+
+          const key = `${platform}-${arch}`;
+          const binName = map[key];
+
+          if (!binName) {
+            console.error(`Unsupported platform: ${key}`);
+            process.exit(1);
+          }
+
+          const src = path.join(__dirname, 'bin', binName);
+          const destDir = path.join(process.env.HOME || process.env.USERPROFILE, '.local', 'bin');
+          const dest = path.join(destDir, process.platform === 'win32' ? 'agentrete.exe' : 'agentrete');
+
+          fs.mkdirSync(destDir, { recursive: true });
+          fs.copyFileSync(src, dest);
+          fs.chmodSync(dest, 0o755);
+
+          console.log(`agentrete installed to ${dest}`);
+          console.log('Run "agentrete setup" to configure AI tools.');
+          INSTALLJS
+
+      - name: Publish to npm
+        run: |
+          cd npm
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
