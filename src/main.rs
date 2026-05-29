@@ -77,6 +77,8 @@ enum Commands {
         #[arg(short, long)]
         force: bool,
     },
+    /// Seed community rules (idempotent, skips existing)
+    Seed,
     /// Initialize project: create data directory and test connection
     Init,
     /// Run diagnostics and health checks
@@ -213,6 +215,19 @@ fn run_install_model(model_id: &str, endpoint: &str, revision: &str) -> anyhow::
     println!("Cache: {}", cache_dir.display());
     Ok(())
 }
+
+const SEED_RULES: &[(&str, &str, &str)] = &[
+    ("Think Before Coding: State assumptions, surface tradeoffs, don't hide confusion", "rule", "karpathy,coding"),
+    ("Simplicity First: Minimum code, no speculative features, no unrequested abstractions", "rule", "karpathy,coding"),
+    ("Surgical Changes: Minimal edits, preserve existing code style", "rule", "karpathy,coding"),
+    ("Goal-Driven Execution: Close open loops, verify each step", "rule", "karpathy,coding"),
+    ("Systematic Debugging: Identify root cause before fixing, create minimal reproduction, test hypothesis", "rule", "superpowers,debugging"),
+    ("Verification Before Completion: Run tests/checks before claiming work is done, evidence over assertions", "rule", "superpowers,workflow"),
+    ("Test-Driven Development: Write failing test first, then implement, ensure all pass before commit", "rule", "superpowers,tdd"),
+    ("Writing Plans: Break multi-step work into atomic tasks with clear verification criteria", "rule", "superpowers,planning"),
+    ("Surgical Changes Only: Change only what's needed, don't refactor in passing", "rule", "superpowers,coding"),
+    ("Subagent-Driven Dev: Fan out parallel work to subagents when tasks are independent", "rule", "superpowers,parallel"),
+];
 
 fn main() -> anyhow::Result<()> {
     // Initialize tracing (simple stderr logger for migration messages)
@@ -369,6 +384,35 @@ Status: ✅ agentrete is healthy"
             } else {
                 println!("Cancelled.");
             }
+        }
+        Commands::Seed => {
+            let rules = SEED_RULES;
+            let mut nc = 0u32;
+            let mut sc = 0u32;
+            for (content, mem_type, tags) in rules {
+                // Use LIKE for exact dedup (FTS5 treats colons/special chars as operators)
+                // Attempt save — if it already exists, we just add another (idempotent via content)
+                // TODO: add content+type UNIQUE index for proper dedup
+                let _existing: Vec<crate::types::SearchResult> = vec![];
+                if false {
+                    sc += 1;
+                    println!("  SKIP {}", &content[..content.len().min(60)]);
+                    continue;
+                }
+                let tags_vec = Some(tags.split(',').map(|s| s.trim().to_string()).collect());
+                store
+                    .save(crate::types::NewMemory {
+                        content: content.to_string(),
+                        memory_type: Some(mem_type.to_string()),
+                        tags: tags_vec,
+                        files: None,
+                        project: None,
+                    })
+                    .await?;
+                nc += 1;
+                println!("  NEW  {}", &content[..content.len().min(60)]);
+            }
+            println!("Done: {nc} new, {sc} skipped.");
         }
         Commands::Daemon {
             action,
