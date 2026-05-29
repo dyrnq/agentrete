@@ -1,11 +1,17 @@
-//! Unified embedder enum — local (candle) or remote (OpenAI/Ollama API).
+//! Unified embedder enum — local (candle) or remote (OpenAI/Ollama/Anthropic API).
 
-use crate::config::EmbeddingConfig;
+use crate::config::{EmbeddingConfig, RemoteVendor};
 use anyhow::Result;
+
+use super::remote::anthropic::AnthropicEmbedder;
+use super::remote::ollama::OllamaEmbedder;
+use super::remote::openai::OpenAIEmbedder;
 
 pub enum Embedder {
     Local(std::sync::Mutex<super::BasedBertEmbedder>),
-    Remote(super::remote::RemoteEmbedder),
+    OpenAI(OpenAIEmbedder),
+    Anthropic(AnthropicEmbedder),
+    Ollama(OllamaEmbedder),
 }
 
 impl Embedder {
@@ -26,21 +32,43 @@ impl Embedder {
                     .remote_model
                     .as_deref()
                     .unwrap_or("qwen3-embedding:latest");
-                let remote =
-                    super::remote::RemoteEmbedder::new(url, cfg.remote_api_key.as_deref(), model)?;
-                Ok(Embedder::Remote(remote))
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(300))
+                    .build()?;
+                let vendor = cfg
+                    .remote_vendor
+                    .unwrap_or_else(|| RemoteVendor::detect(url));
+                Ok(match vendor {
+                    RemoteVendor::OpenAI => Embedder::OpenAI(OpenAIEmbedder::new(
+                        url,
+                        cfg.remote_api_key.as_deref(),
+                        model,
+                        client,
+                    )),
+                    RemoteVendor::Anthropic => {
+                        let key = cfg
+                            .remote_api_key
+                            .as_deref()
+                            .ok_or_else(|| anyhow::anyhow!("Anthropic requires an API key"))?;
+                        Embedder::Anthropic(AnthropicEmbedder::new(url, key, model, client))
+                    }
+                    RemoteVendor::Ollama => {
+                        Embedder::Ollama(OllamaEmbedder::new(url, model, client))
+                    }
+                })
             }
         }
     }
 
-    
     pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         match self {
             Embedder::Local(mutex) => {
                 let guard = mutex.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
                 guard.embed_batch(texts)
             }
-            Embedder::Remote(remote) => remote.embed_batch_async(texts).await,
+            Embedder::OpenAI(e) => e.embed_batch(texts).await,
+            Embedder::Anthropic(e) => e.embed_batch(texts).await,
+            Embedder::Ollama(e) => e.embed_batch(texts).await,
         }
     }
 
@@ -50,7 +78,9 @@ impl Embedder {
                 let guard = mutex.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
                 guard.embed_one(text)
             }
-            Embedder::Remote(remote) => remote.embed_one_async(text).await,
+            Embedder::OpenAI(e) => e.embed(text).await,
+            Embedder::Anthropic(e) => e.embed(text).await,
+            Embedder::Ollama(e) => e.embed(text).await,
         }
     }
 }

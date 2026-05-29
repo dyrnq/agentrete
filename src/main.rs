@@ -3,6 +3,10 @@
 
 use clap::{Parser, Subcommand};
 
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 mod cli;
 mod config;
 mod embed;
@@ -221,7 +225,13 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let cfg = crate::config::Config::load(None, cli.config.as_deref());
+    // Extract MCP port if present (needed for Config before store init)
+    let mcp_port = if let Commands::Mcp { port } = &cli.command {
+        *port
+    } else {
+        None
+    };
+    let cfg = crate::config::Config::load(mcp_port, cli.config.as_deref());
 
     // Commands that don't need the database
     if let Commands::Setup = &cli.command {

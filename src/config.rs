@@ -18,13 +18,48 @@ pub enum EmbeddingBackend {
     None,
     /// Local on-device model (candle + HuggingFace model).
     Local,
-    /// Remote API (OpenAI-compatible embeddings endpoint).
+    /// Remote API (URL auto-detects vendor: OpenAI/Anthropic/Ollama).
     Remote,
 }
 
 impl Default for EmbeddingBackend {
     fn default() -> Self {
         EmbeddingBackend::Local
+    }
+}
+
+/// Remote embedding vendor (only relevant when backend = "remote").
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteVendor {
+    /// OpenAI-compatible (OpenAI, vLLM, TEI, DeepSeek, etc.)
+    #[serde(alias = "openai")]
+    OpenAI,
+    /// Anthropic embeddings endpoint.
+    #[serde(alias = "anthropic")]
+    Anthropic,
+    /// Ollama local/remote embeddings.
+    #[serde(alias = "ollama")]
+    Ollama,
+}
+
+impl Default for RemoteVendor {
+    fn default() -> Self {
+        RemoteVendor::OpenAI
+    }
+}
+
+impl RemoteVendor {
+    /// Try to auto-detect vendor from URL string.
+    pub fn detect(url: &str) -> Self {
+        let lower = url.to_lowercase();
+        if lower.contains(":11434") || lower.contains("ollama") {
+            RemoteVendor::Ollama
+        } else if lower.contains("anthropic") {
+            RemoteVendor::Anthropic
+        } else {
+            RemoteVendor::OpenAI
+        }
     }
 }
 
@@ -61,6 +96,10 @@ pub struct EmbeddingConfig {
     #[serde(default)]
     pub remote_api_key: Option<String>,
 
+    /// Remote embeddings vendor (auto-detected from URL if unset).
+    #[serde(default)]
+    pub remote_vendor: Option<RemoteVendor>,
+
     /// Remote embeddings model name (e.g., text-embedding-3-small).
     #[serde(default)]
     pub remote_model: Option<String>,
@@ -89,6 +128,7 @@ impl Default for EmbeddingConfig {
             hf_endpoint: default_hf_endpoint(),
             remote_url: None,
             remote_api_key: None,
+            remote_vendor: None,
             remote_model: None,
         }
     }
@@ -198,6 +238,13 @@ impl Config {
                 remote_url: std::env::var("AGENTRETE_REMOTE_URL").ok(),
                 remote_api_key: std::env::var("AGENTRETE_REMOTE_API_KEY").ok(),
                 remote_model: std::env::var("AGENTRETE_REMOTE_MODEL").ok(),
+                remote_vendor: std::env::var("AGENTRETE_REMOTE_VENDOR").ok().map(|v| {
+                    match v.to_lowercase().as_str() {
+                        "ollama" => RemoteVendor::Ollama,
+                        "anthropic" => RemoteVendor::Anthropic,
+                        _ => RemoteVendor::OpenAI,
+                    }
+                }),
             },
             db_dir: std::env::var("AGENTRETE_DB_DIR").ok().map(PathBuf::from),
             cache_dir: std::env::var("AGENTRETE_CACHE_DIR").ok().map(PathBuf::from),
@@ -233,6 +280,9 @@ impl Config {
         if other.embedding.remote_api_key.is_some() {
             self.embedding.remote_api_key = other.embedding.remote_api_key;
         }
+        if other.embedding.remote_vendor.is_some() {
+            self.embedding.remote_vendor = other.embedding.remote_vendor;
+        }
         if other.embedding.remote_model.is_some() {
             self.embedding.remote_model = other.embedding.remote_model;
         }
@@ -257,11 +307,24 @@ impl Config {
         self.embedding.backend == EmbeddingBackend::Remote
     }
 
+    /// Resolve remote vendor: explicit config first, auto-detect from URL as fallback.
+    pub fn remote_vendor(&self) -> RemoteVendor {
+        self.embedding.remote_vendor.unwrap_or_else(|| {
+            self.embedding
+                .remote_url
+                .as_deref()
+                .map(RemoteVendor::detect)
+                .unwrap_or_default()
+        })
+    }
 
     /// The effective embedding model ID (remote_model for remote, model_id for local).
     pub fn effective_model_id(&self) -> String {
         if self.embed_is_remote() {
-            self.embedding.remote_model.clone().unwrap_or_else(|| self.embedding.model_id.clone())
+            self.embedding
+                .remote_model
+                .clone()
+                .unwrap_or_else(|| self.embedding.model_id.clone())
         } else {
             self.embedding.model_id.clone()
         }
@@ -338,6 +401,32 @@ dims = 1536
             cfg.embedding.remote_url.as_deref(),
             Some("https://api.openai.com/v1")
         );
+        assert_eq!(cfg.remote_vendor(), RemoteVendor::OpenAI);
+    }
+
+    #[test]
+    fn test_remote_vendor_explicit() {
+        let toml_str = r#"
+[embedding]
+backend = "remote"
+remote_url = "http://192.168.6.9:11434"
+remote_vendor = "ollama"
+remote_model = "granite-embedding:278m"
+"#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.remote_vendor(), RemoteVendor::Ollama);
+    }
+
+    #[test]
+    fn test_remote_vendor_auto_detect() {
+        let toml_str = r#"
+[embedding]
+backend = "remote"
+remote_url = "https://api.anthropic.com"
+remote_model = "voyage-3"
+"#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.remote_vendor(), RemoteVendor::Anthropic);
     }
 
     #[test]

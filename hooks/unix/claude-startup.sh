@@ -1,27 +1,12 @@
 #!/bin/sh
-# agentrete Claude Code startup hook.
-
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"; . "$HOOK_DIR/_json_extract.sh"
 AGENTRETE_URL="${AGENTRETE_URL:-http://127.0.0.1:9092}"
 PROJECT=$(git rev-parse --show-toplevel 2>/dev/null | xargs basename 2>/dev/null || basename "$PWD")
-CACHE="/tmp/agentrete-claude-$(echo "$PWD" | md5sum | cut -c1-8 2>/dev/null || echo "default").cache"
-
-[ -f "$CACHE" ] && exit 0
-
-result=$(curl -s -X POST "$AGENTRETE_URL" \
-  -H "Content-Type: application/json" \
-  --max-time 3 \
-  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"memory_search\",\"arguments\":{\"query\":\"$PROJECT\",\"limit\":5}}}")
-
+result=$(mcp_post "$AGENTRETE_URL" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"memory_search\",\"arguments\":{\"query\":\"$PROJECT\",\"limit\":5}}}")
 if echo "$result" | grep -q '"score"'; then
-    touch "$CACHE"
-    echo "🧠 agentrete: project memories for $PROJECT" >&2
-    echo "$result" | python3 -c "
-import sys,json
-r=json.load(sys.stdin)
-for c in r.get('result',{}).get('content',[]):
-    print(f'  {c[\"text\"]}', file=sys.stderr)
-" 2>/dev/null
+    echo "🧠 agentrete: project context for $PROJECT" >&2
+    json_lines "$result" 'result.content' 2>/dev/null | while IFS= read -r line; do
+        text=$(json_val "$line" 'text' ''); [ -n "$text" ] && echo "  $text" >&2
+    done
 fi
-
-touch "$CACHE"
-exit 2
+exit 0
