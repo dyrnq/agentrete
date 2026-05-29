@@ -11,29 +11,25 @@ const DEFAULT_PORT: u16 = 9092;
 // ─── Embedding config ────────────────────────────────────────────────────────
 
 /// Where to run embedding inference.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum EmbeddingBackend {
     /// No embedding — BM25 FTS only.
     None,
     /// Local on-device model (candle + HuggingFace model).
+    #[default]
     Local,
     /// Remote API (URL auto-detects vendor: OpenAI/Anthropic/Ollama).
     Remote,
 }
 
-impl Default for EmbeddingBackend {
-    fn default() -> Self {
-        EmbeddingBackend::Local
-    }
-}
-
 /// Remote embedding vendor (only relevant when backend = "remote").
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RemoteVendor {
     /// OpenAI-compatible (OpenAI, vLLM, TEI, DeepSeek, etc.)
     #[serde(alias = "openai")]
+    #[default]
     OpenAI,
     /// Anthropic embeddings endpoint.
     #[serde(alias = "anthropic")]
@@ -41,12 +37,6 @@ pub enum RemoteVendor {
     /// Ollama local/remote embeddings.
     #[serde(alias = "ollama")]
     Ollama,
-}
-
-impl Default for RemoteVendor {
-    fn default() -> Self {
-        RemoteVendor::OpenAI
-    }
 }
 
 impl RemoteVendor {
@@ -298,16 +288,19 @@ impl Config {
     // ─── Convenience accessors ───────────────────────────────────────────────
 
     /// Whether embedding is disabled (backend = none).
+    #[allow(dead_code)]
     pub fn embed_enabled(&self) -> bool {
         self.embedding.backend != EmbeddingBackend::None
     }
 
     /// Whether using remote embeddings API.
+    #[allow(dead_code)]
     pub fn embed_is_remote(&self) -> bool {
         self.embedding.backend == EmbeddingBackend::Remote
     }
 
     /// Resolve remote vendor: explicit config first, auto-detect from URL as fallback.
+    #[allow(dead_code)]
     pub fn remote_vendor(&self) -> RemoteVendor {
         self.embedding.remote_vendor.unwrap_or_else(|| {
             self.embedding
@@ -319,6 +312,7 @@ impl Config {
     }
 
     /// The effective embedding model ID (remote_model for remote, model_id for local).
+    #[allow(dead_code)]
     pub fn effective_model_id(&self) -> String {
         if self.embed_is_remote() {
             self.embedding

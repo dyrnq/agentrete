@@ -8,7 +8,7 @@ use super::remote::ollama::OllamaEmbedder;
 use super::remote::openai::OpenAIEmbedder;
 
 pub enum Embedder {
-    Local(std::sync::Mutex<super::BasedBertEmbedder>),
+    Local(Box<std::sync::Mutex<super::BasedBertEmbedder>>),
     OpenAI(OpenAIEmbedder),
     Anthropic(AnthropicEmbedder),
     Ollama(OllamaEmbedder),
@@ -22,7 +22,7 @@ impl Embedder {
             }
             crate::config::EmbeddingBackend::Local => {
                 let model = super::CandleEmbedBuilder::new().with_device_cpu().build()?;
-                Ok(Embedder::Local(std::sync::Mutex::new(model)))
+                Ok(Embedder::Local(Box::new(std::sync::Mutex::new(model))))
             }
             crate::config::EmbeddingBackend::Remote => {
                 let url = cfg.remote_url.as_deref().ok_or_else(|| {

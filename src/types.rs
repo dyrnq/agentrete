@@ -41,6 +41,7 @@ pub struct SearchResult {
     pub created_at: String,
     /// Raw embedding BLOB for on-the-fly cosine computation
     #[serde(skip)]
+    #[allow(dead_code)]
     pub embedding: Option<Vec<u8>>,
 }
 

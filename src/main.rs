@@ -383,10 +383,50 @@ Status: ✅ agentrete is healthy"
             cli::daemon::run(&action, port, &bin)?;
         }
         Commands::Setup => unreachable!(),
-        Commands::Mcp { port } => match port {
-            Some(_p) => mcp::run_http(store, &cfg).await?,
-            None => mcp::run_stdio(store).await?,
-        },
+        Commands::Mcp { port } => {
+            // Spawn embed worker in background if embedding is enabled
+            let embed_handle = if cfg.embed_enabled() {
+                let embedder = crate::embed::embeddings::Embedder::from_config(&cfg.embedding)?;
+                let store2 = store.clone();
+                let model = cfg
+                    .embedding
+                    .remote_model
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string());
+                let dims = cfg.embedding.dims as usize;
+                Some(tokio::spawn(async move {
+                    eprintln!("embed-worker: started (model={model}, dims={dims})");
+                    loop {
+                        match store2.embed_pending(&embedder, &model, dims, 500).await {
+                            Ok(0) => {
+                                // No pending — sleep 5s
+                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                            }
+                            Ok(n) => {
+                                eprintln!("embed-worker: flushed {n} vectors");
+                            }
+                            Err(e) => {
+                                eprintln!("embed-worker: error flushing: {e}");
+                                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                            }
+                        }
+                    }
+                }))
+            } else {
+                None
+            };
+
+            let result = match port {
+                Some(_p) => mcp::run_http(store, &cfg).await,
+                None => mcp::run_stdio(store).await,
+            };
+
+            // Abort embed worker on shutdown
+            if let Some(h) = embed_handle {
+                h.abort();
+            }
+            result?
+        }
     }
 
     Ok(())

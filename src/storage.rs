@@ -39,6 +39,7 @@ impl Store {
     async fn initialize(&self) -> Result<()> {
         sqlx::query("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY, migrated_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, importance REAL DEFAULT 0.5, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT)").execute(&self.pool).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_embed_null ON memories(embedding) WHERE embedding IS NULL").execute(&self.pool).await?;
         sqlx::query("CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content, content_rowid='rowid', tokenize='unicode61')").execute(&self.pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, data TEXT, metadata TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY, content TEXT, tool_name TEXT, session_id TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
@@ -67,6 +68,7 @@ impl Store {
             .bind(&input.content)
             .execute(&self.pool)
             .await?;
+        // embedding=NULL — embed-worker picks it up later
         Ok(id)
     }
 
@@ -78,10 +80,10 @@ impl Store {
     ) -> Result<Vec<SearchResult>> {
         let lim = limit.min(100) as i64;
         let rows: Vec<SearchRow> = if let Some(t) = memory_type {
-            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.importance, m.created_at FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 ORDER BY rank LIMIT ?3")
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 ORDER BY rank LIMIT ?3")
                 .bind(query).bind(t).bind(lim).fetch_all(&self.pool).await?
         } else {
-            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.importance, m.created_at FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2")
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2")
                 .bind(query).bind(lim).fetch_all(&self.pool).await?
         };
         Ok(rows
@@ -96,7 +98,7 @@ impl Store {
                 importance: r.importance.unwrap_or(0.5),
                 score: 0.5,
                 created_at: r.created_at.unwrap_or_default(),
-                embedding: None,
+                embedding: r.embedding,
             })
             .collect())
     }
@@ -164,7 +166,61 @@ impl Store {
             db_path: self.path.to_string_lossy().to_string(),
         })
     }
+
+    // ─── embed worker (public, called from mcp server) ──────────────────────
+
+    /// Poll for rows without embeddings and compute them via remote API.
+    pub async fn embed_pending(
+        &self,
+        embedder: &crate::embed::embeddings::Embedder,
+        model_name: &str,
+        dims: usize,
+        batch_size: usize,
+    ) -> Result<usize> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, content FROM memories WHERE embedding IS NULL OR embedding_model IS NOT ?2 OR embedding_dims IS NOT ?3 ORDER BY embedding IS NULL DESC, created_at ASC LIMIT ?1",
+        )
+        .bind(batch_size as i64)
+        .bind(model_name)
+        .bind(dims as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        if rows.is_empty() {
+            return Ok(0);
+        }
+
+        let ids: Vec<&str> = rows.iter().map(|(id, _)| id.as_str()).collect();
+        let texts: Vec<&str> = rows.iter().map(|(_, c)| c.as_str()).collect();
+
+        let vectors = embedder.embed_batch(&texts).await?;
+        if vectors.len() != rows.len() {
+            anyhow::bail!(
+                "embed_batch returned {} vectors for {} inputs",
+                vectors.len(),
+                rows.len()
+            );
+        }
+
+        let model_bytes = model_name.as_bytes();
+        let dims_i64 = dims as i64;
+
+        for ((id, _), vec) in rows.iter().zip(vectors.iter()) {
+            let blob: Vec<u8> = vec.iter().flat_map(|f| f32::to_le_bytes(*f)).collect();
+            sqlx::query("UPDATE memories SET embedding=?1, embedding_model=?2, embedding_dims=?3 WHERE id=?4")
+                .bind(&blob)
+                .bind(model_bytes)
+                .bind(dims_i64)
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        }
+
+        Ok(ids.len())
+    }
 }
+
+// ─── Row types ──────────────────────────────────────────────────────────────
 
 #[derive(sqlx::FromRow)]
 struct SearchRow {
@@ -177,6 +233,7 @@ struct SearchRow {
     project: Option<String>,
     importance: Option<f64>,
     created_at: Option<String>,
+    embedding: Option<Vec<u8>>,
 }
 #[derive(sqlx::FromRow)]
 struct MemoryRow {
