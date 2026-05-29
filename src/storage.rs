@@ -37,12 +37,8 @@ impl Store {
 
         // Enable WAL mode for concurrent reads
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;").ok();
-        // Load sqlite-vec extension
-        unsafe {
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
-                sqlite_vec::sqlite3_vec_init as *const (),
-            )));
-        }
+
+
 
         let (tx, rx) = watch::channel(true);
 
@@ -100,11 +96,8 @@ impl Store {
             );
 
             -- sqlite-vec virtual table for KNN vector search
-            CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
-                embedding float[768]
-            );
 
-            CREATE TABLE IF NOT EXISTS sessions (
+CREATE TABLE IF NOT EXISTS sessions (
                 id       TEXT PRIMARY KEY,
                 data     TEXT,
                 metadata TEXT,
@@ -236,14 +229,8 @@ impl Store {
             params![rowid, input.content],
         ).ok();
 
-        // Sync to vec0 if embedding exists
-        if let Some(ref vec) = embedding_vec {
-            let blob = floats_to_blob(vec);
-            self.conn.execute(
-                "INSERT OR REPLACE INTO vec_memories(rowid, embedding) VALUES (?1, ?2)",
-                params![rowid, blob],
-            ).ok();
-        }
+
+
 
         Ok(id)
     }
@@ -348,7 +335,7 @@ impl Store {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // KNN row mapper (includes score from vec0)
-fn map_knn_row(row: &rusqlite::Row) -> rusqlite::Result<SearchResult> {
+fn map_vec_row(row: &rusqlite::Row) -> rusqlite::Result<SearchResult> {
     Ok(SearchResult {
         id: row.get(0)?,
         memory_type: row.get(1)?,
@@ -403,3 +390,5 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if na == 0.0 || nb == 0.0 { return 0.0; }
     ((dot / (na * nb)) as f64).clamp(-1.0, 1.0)
 }
+
+
