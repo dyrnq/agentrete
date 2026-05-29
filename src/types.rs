@@ -55,4 +55,5 @@ pub struct DbStats {
     pub session_count: i64,
     pub observation_count: i64,
     pub db_path: String,
+    pub db_size_bytes: u64,
 }

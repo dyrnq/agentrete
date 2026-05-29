@@ -140,9 +140,10 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                                 text.push_str(&format!("  {}: {}\n", t, c));
                             }
                         }
+                        let size_mb = s.db_size_bytes as f64 / 1_048_576.0;
                         text.push_str(&format!(
-                            "Sessions: {}\nObservations: {}\nDB: {}",
-                            s.session_count, s.observation_count, s.db_path
+                            "Sessions: {}\nObservations: {}\nDB size: {:.1} MB\nDB path: {}",
+                            s.session_count, s.observation_count, size_mb, s.db_path
                         ));
                         jsonrpc_ok(
                             &id,

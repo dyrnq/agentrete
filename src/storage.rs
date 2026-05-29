@@ -285,6 +285,7 @@ impl Store {
         .fetch_optional(&self.pool).await?;
         let model_info = model.map(|(m, d)| format!("{m} ({d}d)"));
 
+        let db_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
         Ok(DbStats {
             memory_count: mc,
             with_embedding: we,
@@ -293,6 +294,7 @@ impl Store {
             session_count: sc,
             observation_count: oc,
             db_path: self.path.to_string_lossy().to_string(),
+            db_size_bytes: db_size,
         })
     }
 
