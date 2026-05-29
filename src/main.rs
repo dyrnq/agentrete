@@ -384,51 +384,58 @@ Status: ✅ agentrete is healthy"
         }
         Commands::Setup => unreachable!(),
         Commands::Mcp { port } => {
-            // Spawn embed worker in background if embedding is enabled
-            let embed_handle = if cfg.embedding.backend != crate::config::EmbeddingBackend::None {
-                let embedder = crate::embed::embeddings::Embedder::from_config(&cfg.embedding)?;
-                let store2 = store.clone();
-                let (model, dims) =
-                    if cfg.embedding.backend == crate::config::EmbeddingBackend::Remote {
-                        (
-                            cfg.embedding
-                                .remote
-                                .model
-                                .clone()
-                                .unwrap_or_else(|| "unknown".into()),
-                            cfg.embedding.remote.dims.unwrap_or(768) as usize,
-                        )
-                    } else {
-                        (
-                            cfg.embedding.local.model.clone(),
-                            cfg.embedding.local.dims as usize,
-                        )
-                    };
-                Some(tokio::spawn(async move {
-                    eprintln!("embed-worker: started (model={model}, dims={dims})");
-                    loop {
-                        match store2.embed_pending(&embedder, &model, dims, 500).await {
-                            Ok(0) => {
-                                // No pending — sleep 5s
-                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                            }
-                            Ok(n) => {
-                                eprintln!("embed-worker: flushed {n} vectors");
-                            }
-                            Err(e) => {
-                                eprintln!("embed-worker: error flushing: {e}");
-                                tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            // Spawn embed worker only in HTTP mode (stdio instances share DB)
+            let is_http = port.is_some();
+            let embed_handle =
+                if is_http && cfg.embedding.backend != crate::config::EmbeddingBackend::None {
+                    let embedder = crate::embed::embeddings::Embedder::from_config(&cfg.embedding)?;
+                    let store2 = store.clone();
+                    let (model, dims) =
+                        if cfg.embedding.backend == crate::config::EmbeddingBackend::Remote {
+                            (
+                                cfg.embedding
+                                    .remote
+                                    .model
+                                    .clone()
+                                    .unwrap_or_else(|| "unknown".into()),
+                                cfg.embedding.remote.dims.unwrap_or(768) as usize,
+                            )
+                        } else {
+                            (
+                                cfg.embedding.local.model.clone(),
+                                cfg.embedding.local.dims as usize,
+                            )
+                        };
+                    Some(tokio::spawn(async move {
+                        eprintln!("embed-worker: started (model={model}, dims={dims})");
+                        loop {
+                            match store2.embed_pending(&embedder, &model, dims, 500).await {
+                                Ok(0) => {
+                                    // No pending — sleep 5s
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                }
+                                Ok(n) => {
+                                    eprintln!("embed-worker: flushed {n} vectors");
+                                }
+                                Err(e) => {
+                                    eprintln!("embed-worker: error flushing: {e}");
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                                }
                             }
                         }
-                    }
-                }))
-            } else {
-                None
-            };
+                    }))
+                } else {
+                    None
+                };
 
             let result = match port {
                 Some(_p) => mcp::run_http(store, &cfg).await,
-                None => mcp::run_stdio(store).await,
+                None => {
+                    eprintln!(
+                        "agentrete: stdio mode (embed worker disabled, use HTTP for embeddings)"
+                    );
+                    mcp::run_stdio(store).await
+                }
             };
 
             // Abort embed worker on shutdown

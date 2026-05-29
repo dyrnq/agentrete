@@ -95,13 +95,13 @@ pub struct EmbeddingConfig {
 }
 
 fn default_model_id() -> String {
-    "moka-ai/m3e-base".to_string()
+    "BAAI/bge-small-zh-v1.5".to_string()
 }
 fn default_revision() -> String {
     "main".to_string()
 }
 fn default_dims() -> u16 {
-    768
+    512
 }
 fn default_hf_endpoint() -> String {
     "https://hf-mirror.com".to_string()
@@ -234,8 +234,8 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.port, 9092);
         assert_eq!(cfg.embedding.backend, EmbeddingBackend::Local);
-        assert_eq!(cfg.embedding.local.model, "moka-ai/m3e-base");
-        assert_eq!(cfg.embedding.local.dims, 768);
+        assert_eq!(cfg.embedding.local.model, "BAAI/bge-small-zh-v1.5");
+        assert_eq!(cfg.embedding.local.dims, 512);
     }
 
     #[test]
