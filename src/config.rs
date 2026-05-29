@@ -257,6 +257,16 @@ impl Config {
         self.embedding.backend == EmbeddingBackend::Remote
     }
 
+
+    /// The effective embedding model ID (remote_model for remote, model_id for local).
+    pub fn effective_model_id(&self) -> String {
+        if self.embed_is_remote() {
+            self.embedding.remote_model.clone().unwrap_or_else(|| self.embedding.model_id.clone())
+        } else {
+            self.embedding.model_id.clone()
+        }
+    }
+
     pub fn db_dir(&self) -> PathBuf {
         self.db_dir.clone().unwrap_or_else(|| {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());

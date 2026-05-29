@@ -15,25 +15,19 @@ impl Embedder {
                 anyhow::bail!("Embedder::from_config called with backend=none")
             }
             crate::config::EmbeddingBackend::Local => {
-                let model = super::CandleEmbedBuilder::new()
-                    .with_device_cpu()
-                    .build()?;
+                let model = super::CandleEmbedBuilder::new().with_device_cpu().build()?;
                 Ok(Embedder::Local(std::sync::Mutex::new(model)))
             }
             crate::config::EmbeddingBackend::Remote => {
-                let url = cfg
-                    .remote_url
-                    .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("remote_url is required for remote embedding"))?;
+                let url = cfg.remote_url.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("remote_url is required for remote embedding")
+                })?;
                 let model = cfg
                     .remote_model
                     .as_deref()
                     .unwrap_or("qwen3-embedding:latest");
-                let remote = super::remote::RemoteEmbedder::new(
-                    url,
-                    cfg.remote_api_key.as_deref(),
-                    model,
-                )?;
+                let remote =
+                    super::remote::RemoteEmbedder::new(url, cfg.remote_api_key.as_deref(), model)?;
                 Ok(Embedder::Remote(remote))
             }
         }

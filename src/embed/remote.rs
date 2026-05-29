@@ -63,7 +63,10 @@ impl RemoteEmbedder {
         let arr = resp["data"][0]["embedding"]
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("OpenAI: missing data[0].embedding"))?;
-        Ok(arr.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect())
+        Ok(arr
+            .iter()
+            .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+            .collect())
     }
 
     async fn embed_ollama(&self, text: &str) -> Result<Vec<f32>> {
@@ -86,7 +89,10 @@ impl RemoteEmbedder {
                     serde_json::to_string(&resp).unwrap_or_default()
                 )
             })?;
-        Ok(arr.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect())
+        Ok(arr
+            .iter()
+            .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+            .collect())
     }
 }
 
@@ -132,12 +138,8 @@ mod tests {
             return;
         }
 
-        let emb = RemoteEmbedder::new(
-            "http://192.168.6.9:11434",
-            None,
-            "granite-embedding:278m",
-        )
-        .unwrap();
+        let emb = RemoteEmbedder::new("http://192.168.6.9:11434", None, "granite-embedding:278m")
+            .unwrap();
 
         let vec = emb.embed_one("Hello world 你好").unwrap();
         assert_eq!(vec.len(), 768, "granite-embedding:278m should be 768d");
@@ -156,10 +158,9 @@ mod tests {
             return;
         }
 
-        let emb = RemoteEmbedder::new("http://192.168.6.9:11434", None, "nomic-embed-text:latest").unwrap();
+        let emb = RemoteEmbedder::new("http://192.168.6.9:11434", None, "nomic-embed-text:latest")
+            .unwrap();
         let vec = emb.embed_one("test").unwrap();
         assert_eq!(vec.len(), 768);
     }
 }
-
-
