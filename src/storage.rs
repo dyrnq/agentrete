@@ -135,48 +135,7 @@ impl Store {
             .bind(&input.content)
             .execute(&self.pool)
             .await?;
-        // For Model2Vec: compute embedding inline (fast enough)
-        if let Some(ref emb) = self.embedder {
-            if matches!(
-                emb.as_ref(),
-                crate::embed::embeddings::Embedder::Model2Vec(_)
-            ) {
-                if let Ok(vec) = emb.embed_one(&input.content).await {
-                    let blob: Vec<u8> = vec.iter().flat_map(|f| f32::to_le_bytes(*f)).collect();
-                    let dims = vec.len() as i64;
-                    sqlx::query(
-                        "UPDATE memories SET embedding=?1, embedding_model=?2, embedding_dims=?3 WHERE id=?4",
-                    )
-                    .bind(&blob)
-                    .bind("model2vec")
-                    .bind(dims)
-                    .bind(&id)
-                    .execute(&self.pool)
-                    .await?;
-
-                    if self.vec_enabled {
-                        let rowid: i64 =
-                            sqlx::query_scalar("SELECT rowid FROM memories WHERE id=?1")
-                                .bind(&id)
-                                .fetch_one(&self.pool)
-                                .await?;
-                        let mut nvec = vec;
-                        normalize_l2(&mut nvec);
-                        if let Ok(json_vec) = serde_json::to_string(&nvec) {
-                            sqlx::query(
-                                "INSERT OR REPLACE INTO vec_memories(rowid, embedding) VALUES (?1, ?2)",
-                            )
-                            .bind(rowid)
-                            .bind(&json_vec)
-                            .execute(&self.pool)
-                            .await?;
-                        }
-                    }
-                }
-            }
-        }
-
-        // embedding=NULL — embed-worker picks it up later (for non-Model2Vec backends)
+        // embedding=NULL — embed-worker picks it up later
         Ok(id)
     }
 

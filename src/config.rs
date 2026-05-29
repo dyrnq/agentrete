@@ -16,10 +16,8 @@ const DEFAULT_PORT: u16 = 9092;
 pub enum EmbeddingBackend {
     /// No embedding — BM25 FTS only.
     None,
-    /// Local on-device model (candle BERT).
-    #[default]
-    Local,
     /// Model2Vec static embeddings — distilled sentence-transformers, 10MB, ultra-fast CPU.
+    #[default]
     Model2Vec,
     /// Remote API (URL auto-detects vendor: OpenAI/Anthropic/Ollama).
     Remote,
@@ -116,7 +114,7 @@ fn default_hf_endpoint() -> String {
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
-            backend: EmbeddingBackend::Local,
+            backend: EmbeddingBackend::Model2Vec,
             local: LocalConfig {
                 model: "BAAI/bge-small-zh-v1.5".to_string(),
                 dims: 512,
@@ -243,7 +241,7 @@ mod tests {
     fn test_defaults() {
         let cfg = Config::default();
         assert_eq!(cfg.port, 9092);
-        assert_eq!(cfg.embedding.backend, EmbeddingBackend::Local);
+        assert_eq!(cfg.embedding.backend, EmbeddingBackend::Model2Vec);
         assert_eq!(cfg.embedding.local.model, "BAAI/bge-small-zh-v1.5");
         assert_eq!(cfg.embedding.local.dims, 512);
     }

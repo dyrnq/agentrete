@@ -446,7 +446,6 @@ Status: ✅ agentrete is healthy"
             let is_http = port.is_some();
             let embed_handle = if is_http
                 && cfg.embedding.backend != crate::config::EmbeddingBackend::None
-                && cfg.embedding.backend != crate::config::EmbeddingBackend::Model2Vec
             {
                 let embedder = crate::embed::embeddings::Embedder::from_config(&cfg.embedding)?;
                 let store2 = store.clone();

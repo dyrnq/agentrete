@@ -10,7 +10,6 @@ use super::remote::openai::OpenAIEmbedder;
 
 #[allow(clippy::large_enum_variant)]
 pub enum Embedder {
-    Local(Box<std::sync::Mutex<super::BasedBertEmbedder>>),
     Model2Vec(Model2VecEmbed),
     OpenAI(OpenAIEmbedder),
     Anthropic(AnthropicEmbedder),
@@ -21,16 +20,9 @@ impl Embedder {
     pub fn from_config(cfg: &EmbeddingConfig) -> Result<Self> {
         match cfg.backend {
             crate::config::EmbeddingBackend::None => {
-                anyhow::bail!("Embedder::from_config called with backend=none")
+                anyhow::bail!("EmbeddingBackend::None requested but no embedder available")
             }
-            crate::config::EmbeddingBackend::Local => {
-                let model = super::CandleEmbedBuilder::new()
-                    .custom_embedding_model(&cfg.local.model)
-                    .custom_model_revision(&cfg.local.revision)
-                    .with_device_cpu()
-                    .build()?;
-                Ok(Embedder::Local(Box::new(std::sync::Mutex::new(model))))
-            }
+
             crate::config::EmbeddingBackend::Model2Vec => {
                 Model2VecEmbed::new(cfg).map(Embedder::Model2Vec)
             }
@@ -75,10 +67,6 @@ impl Embedder {
 
     pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         match self {
-            Embedder::Local(mutex) => {
-                let guard = mutex.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
-                guard.embed_batch(texts)
-            }
             Embedder::OpenAI(e) => e.embed_batch(texts).await,
             Embedder::Anthropic(e) => e.embed_batch(texts).await,
             Embedder::Ollama(e) => e.embed_batch(texts).await,
@@ -88,10 +76,6 @@ impl Embedder {
 
     pub async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
         match self {
-            Embedder::Local(mutex) => {
-                let guard = mutex.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
-                guard.embed_one(text)
-            }
             Embedder::OpenAI(e) => e.embed(text).await,
             Embedder::Anthropic(e) => e.embed(text).await,
             Embedder::Ollama(e) => e.embed(text).await,

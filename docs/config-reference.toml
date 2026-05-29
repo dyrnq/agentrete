@@ -10,7 +10,7 @@ port = 9092
 # ─── Embedding ───────────────────────────────────────────────────────────────
 
 [embedding]
-backend = "remote"      # "none" | "local" | "remote"
+backend = "remote"      # "none" | "model2vec" | "remote"
 
 # ── Local backend ────────────────────────────────────────────────────────────
 [embedding.local]
@@ -35,7 +35,7 @@ dims = 4096
 
 # Local offline model:
 # [embedding]
-# backend = "local"
+# backend = "local"  # REMOVED — use "model2vec" instead
 #
 # [embedding.local]
 # model = "BAAI/bge-small-zh-v1.5"

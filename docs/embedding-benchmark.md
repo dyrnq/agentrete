@@ -4,9 +4,13 @@ Benchmarked on 6 Chinese/English mixed texts (zh_rule, en_rule, zh_build, en_bui
 
 ## Comparison
 
+> **Note**: candle backends (`m3e-base`, `bge-small-zh-v1.5`) have been **removed** as of 2026-05.
+> Model2Vec replaces them — 1000x faster, 10MB model, same source models via distillation.
+
 | Model | Backend | Dims | Size | Speed | Cross-Lingual ↑ | Noise Reject ↓ | Verdict |
 |-------|---------|------|------|-------|-----------------|----------------|---------|
-| **m3e-base** | local (candle) | 768 | 391MB | ~3s load / 50ms | ~0.82 | ~0.35 | Good Chinese, no GPU needed |
+| **bge-small-zh-v1.5 (m2v)** | model2vec | 256 | **10MB** | **0.17ms/text** | ~0.73 | ~0.27 | ✅ Default — ultra-fast, 10MB, zero config |
+| ~~m3e-base~~ | ~~local (candle)~~ | 768 | 391MB | ~3s load / 50ms | ~0.82 | ~0.35 | REMOVED — replaced by Model2Vec |
 | **granite-embedding:278m** | remote (Ollama) | 768 | 278MB | 0.1s | 0.77 | 0.48/0.42 | **Default** — balanced |
 | qwen3-embedding | remote (Ollama) | 4096 | 7.6B | 0.2s | **0.84** | 0.42/0.38 | Best cross-lingual, poor noise rejection |
 | nomic-embed-text-v2-moe | remote (Ollama) | 768 | ~1GB | 0.1s | 0.81 | **0.08/0.06** | Best noise rejection, weak semantics |
@@ -42,12 +46,12 @@ Benchmarked on 6 Chinese/English mixed texts (zh_rule, en_rule, zh_build, en_bui
 
 | Scenario | Model |
 |----------|-------|
-| No network / air-gapped | `m3e-base` (local) |
+| No network / air-gapped | `bge-small-zh-v1.5` (model2vec) |
 | Balanced (default) | `granite-embedding:278m` |
 | Best accuracy, have GPU | `qwen3-embedding:latest` |
 | Lots of noise to filter | `nomic-embed-text-v2-moe` |
 
-## Local Model: bge-small-zh-v1.5 (Verified)
+## Local Model: bge-small-zh-v1.5 (REMOVED — candle version)
 
 | Model | Dims | Size | Load Time | 8-batch Time | Verdict |
 |-------|------|------|-----------|-------------|---------|

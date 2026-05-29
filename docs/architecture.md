@@ -60,9 +60,9 @@ src/
 │   └── v2025_11.rs      2025-11-25 protocol (Stable)
 ├── storage.rs           SQLite via sqlx, sqlite-vec KNN, FTS5 fallback, embed_pending()
 ├── embed/
-│   ├── mod.rs           candle BERT model loader (local backend)
-│   ├── models.rs        Model presets constants
-│   ├── embeddings.rs    Embedder enum (Local / OpenAI / Anthropic / Ollama)
+│   ├── mod.rs           module declarations
+│   ├── model2vec_embed.rs Model2Vec static embedding backend
+│   ├── embeddings.rs    Embedder enum (Model2Vec / OpenAI / Anthropic / Ollama)
 │   └── remote/
 │       ├── mod.rs       RemoteEmbedder enum + RemoteProvider::detect()
 │       ├── openai.rs    OpenAI-compatible embeddings endpoint
@@ -168,7 +168,7 @@ Version negotiation: client sends `protocolVersion` in `initialize` → server m
 | Backend | Config | Dimension | Batch | Auth |
 |---------|--------|-----------|-------|------|
 | **None** | `backend = "none"` | — | — | — |
-| **Local** (candle) | `backend = "local"` | 512d (bge-small) | Sequential | — |
+| **Model2Vec** (default) | `backend = "model2vec"` | 256d (bge-small distilled) | ✅ native batch | — |
 | **Remote Ollama** | `backend = "remote"`, `vendor = "ollama"` | 768/4096 | ✅ native batch | None |
 | **Remote OpenAI** | `backend = "remote"`, `vendor = "openai"` | model-dependent | ✅ native batch | API key |
 | **Remote Anthropic** | `backend = "remote"`, `vendor = "anthropic"` | model-dependent | ✅ native batch | API key |
@@ -223,8 +223,8 @@ No hooks fail due to missing runtime dependencies.
 |-------|---------|---------|
 | `sqlx` (sqlite, sqlite-load-extension) | 0.9 | Async SQLite with connection pool + extension loading |
 | `axum` | 0.8 | HTTP server (Streamable HTTP transport) |
-| `candle-core` / `candle-transformers` / `candle-nn` | 0.10 | On-device BERT embedding (local backend) |
 | `tokenizers` | 0.19 | HuggingFace tokenizer |
+| `model2vec-rs` | 0.2.1 | Static embedding model (distilled sentence-transformers) |
 | `hf-hub` | 0.5 | HuggingFace model download |
 | `reqwest` | 0.12 | HTTP client (install-model, remote embed) |
 | `tikv-jemallocator` | 0.7 | jemalloc global allocator |

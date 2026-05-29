@@ -32,7 +32,8 @@ embedding:
 #   backend: local
 #   local:
 #     model: BAAI/bge-small-zh-v1.5
-#     dims: 512
+#     dims: 256
+  model2vec_path: "/path/to/distilled/model"
 
 # OpenAI:
 # embedding:
