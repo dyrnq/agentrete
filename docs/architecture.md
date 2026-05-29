@@ -153,10 +153,10 @@ User/Codex "search memories for: xxx"
 
 ## Transports
 
-| Transport | Use Case | Details |
-|-----------|----------|---------|
-| **Streamable HTTP** | Codex MCP HTTP mode | axum on 127.0.0.1:{port}, POST `/` for JSON-RPC, GET `/` for health |
-| **stdio** | Codex MCP stdio mode | stdin/stdout line-delimited JSON-RPC |
+| Transport | Embed Worker | Use Case | Details |
+|-----------|-------------|----------|---------|
+| **Streamable HTTP** | ✅ | Production, shared | axum on 127.0.0.1:{port}, POST `/` for JSON-RPC, GET `/` for health |
+| **stdio** | ❌ | Per-instance, CRUD only | stdin/stdout line-delimited JSON-RPC, no embedding computation |
 
 ## MCP Protocol Compliance
 
@@ -175,7 +175,7 @@ Version negotiation: client sends `protocolVersion` in `initialize` → server m
 | Backend | Config | Dimension | Batch | Auth |
 |---------|--------|-----------|-------|------|
 | **None** | `backend = "none"` | — | — | — |
-| **Local** (candle) | `backend = "local"` | model-dependent | Sequential | — |
+| **Local** (candle) | `backend = "local"` | 512d (bge-small) | Sequential | — |
 | **Remote Ollama** | `backend = "remote"`, `remote_vendor = "ollama"` | 768/4096 | ✅ native batch | None |
 | **Remote OpenAI** | `backend = "remote"`, `remote_vendor = "openai"` | model-dependent | ✅ native batch | API key |
 | **Remote Anthropic** | `backend = "remote"`, `remote_vendor = "anthropic"` | model-dependent | ✅ native batch | API key |
