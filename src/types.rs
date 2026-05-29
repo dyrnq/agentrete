@@ -47,8 +47,8 @@ pub struct SearchResult {
 /// Database statistics.
 #[derive(Debug, Clone)]
 pub struct DbStats {
-    pub memory_count: u64,
-    pub session_count: u64,
-    pub observation_count: u64,
+    pub memory_count: i64,
+    pub session_count: i64,
+    pub observation_count: i64,
     pub db_path: String,
 }
