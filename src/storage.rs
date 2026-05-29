@@ -36,12 +36,13 @@ impl Store {
             .create_if_missing(true)
             .foreign_keys(true);
 
-        let ext_name = if cfg!(target_os = "windows") {
-            "ext/vec0.dll"
-        } else if cfg!(target_os = "macos") {
-            "ext/vec0.dylib"
-        } else {
-            "ext/vec0.so"
+        let ext_name = match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("linux", "x86_64") => "ext/vec0-linux-x86_64.so",
+            ("linux", "aarch64") => "ext/vec0-linux-aarch64.so",
+            ("macos", "x86_64") => "ext/vec0-macos-x86_64.dylib",
+            ("macos", "aarch64") => "ext/vec0-macos-aarch64.dylib",
+            ("windows", "x86_64") => "ext/vec0-windows-x86_64.dll",
+            _ => "ext/vec0.so",
         };
         let ext_so = std::env::current_dir().unwrap_or_default().join(ext_name);
         if ext_so.exists() {
