@@ -126,10 +126,29 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                     Err(e) => jsonrpc_err(&id, -32000, &format!("Forget failed: {}", e)),
                 },
                 "memory_stats" => match store.stats().await {
-                    Ok(s) => jsonrpc_ok(
-                        &id,
-                        serde_json::json!({"content":[{"type":"text","text":format!("Memories: {}\nDB: {}",s.memory_count,s.db_path)}]}),
-                    ),
+                    Ok(s) => {
+                        let mut text = format!(
+                            "Memories: {} ({} embeddings)\n",
+                            s.memory_count, s.with_embedding
+                        );
+                        if let Some(ref mi) = s.model_info {
+                            text.push_str(&format!("Model: {}\n", mi));
+                        }
+                        if !s.type_counts.is_empty() {
+                            text.push_str("By type:\n");
+                            for (t, c) in &s.type_counts {
+                                text.push_str(&format!("  {}: {}\n", t, c));
+                            }
+                        }
+                        text.push_str(&format!(
+                            "Sessions: {}\nObservations: {}\nDB: {}",
+                            s.session_count, s.observation_count, s.db_path
+                        ));
+                        jsonrpc_ok(
+                            &id,
+                            serde_json::json!({"content":[{"type":"text","text":text}]}),
+                        )
+                    }
                     Err(e) => jsonrpc_err(&id, -32000, &format!("Stats failed: {}", e)),
                 },
                 _ => jsonrpc_err(&id, -32601, &format!("Unknown tool: {}", n)),

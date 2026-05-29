@@ -49,6 +49,9 @@ pub struct SearchResult {
 #[derive(Debug, Clone)]
 pub struct DbStats {
     pub memory_count: i64,
+    pub with_embedding: i64,
+    pub type_counts: Vec<(String, i64)>,
+    pub model_info: Option<String>,
     pub session_count: i64,
     pub observation_count: i64,
     pub db_path: String,

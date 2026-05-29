@@ -259,6 +259,10 @@ impl Store {
         let mc: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
             .fetch_one(&self.pool)
             .await?;
+        let we: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE embedding IS NOT NULL")
+                .fetch_one(&self.pool)
+                .await?;
         let sc: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
             .fetch_one(&self.pool)
             .await
@@ -267,8 +271,25 @@ impl Store {
             .fetch_one(&self.pool)
             .await
             .unwrap_or(0);
+
+        // Type distribution
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT COALESCE(type,'(none)') as t, COUNT(*) as c FROM memories GROUP BY type ORDER BY c DESC",
+        )
+        .fetch_all(&self.pool).await?;
+
+        // Current model info
+        let model: Option<(String, i64)> = sqlx::query_as(
+            "SELECT embedding_model, embedding_dims FROM memories WHERE embedding IS NOT NULL LIMIT 1",
+        )
+        .fetch_optional(&self.pool).await?;
+        let model_info = model.map(|(m, d)| format!("{m} ({d}d)"));
+
         Ok(DbStats {
             memory_count: mc,
+            with_embedding: we,
+            type_counts: rows,
+            model_info,
             session_count: sc,
             observation_count: oc,
             db_path: self.path.to_string_lossy().to_string(),
