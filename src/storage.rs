@@ -132,7 +132,13 @@ impl Store {
     /// sqlite-vec KNN search. Falls back to FTS5 if vec extension not loaded.
     pub async fn search_vec(
         &self,
-        query_vec: &[f32],
+        query_vec_orig: &[f32],
+        limit: u8,
+        memory_type: Option<&str>,
+    ) -> Result<Vec<SearchResult>> {
+        let mut query_vec = query_vec_orig.to_vec();
+        normalize_l2(&mut query_vec);
+        let query_vec = query_vec; // rebind as &[f32]
         limit: u8,
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
@@ -163,7 +169,7 @@ impl Store {
                         files: parse_json(&files),
                         project,
                         importance: importance.unwrap_or(0.5),
-                        score: 1.0 - distance as f64,
+                        score: (1.0 - (distance as f64).powi(2) / 2.0).max(0.0),
                         created_at: created_at.unwrap_or_default(),
                         embedding: None,
                     }
@@ -589,7 +595,9 @@ impl Store {
                         .fetch_one(&self.pool)
                         .await
                 {
-                    let json_vec = serde_json::to_string(vec).unwrap_or_default();
+                    let mut vec_clone = vec.clone();
+                    normalize_l2(&mut vec_clone);
+                    let json_vec = serde_json::to_string(&vec_clone).unwrap_or_default();
                     sqlx::query(
                         "INSERT OR REPLACE INTO vec_memories(rowid, embedding) VALUES (?1, ?2)",
                     )
@@ -635,6 +643,16 @@ struct MemoryRow {
 }
 
 // ─── Vector math ─────────────────────────────────────────────────────────────
+
+fn normalize_l2(v: &mut [f32]) {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 1e-10 {
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
+    }
+}
+
 
 fn bytes_to_f32_vec(bytes: &[u8]) -> Option<Vec<f32>> {
     if bytes.len() % 4 != 0 {
