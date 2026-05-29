@@ -1,8 +1,11 @@
 # Agentrete System Architecture
 
+> **Search Engine**: sqlite-vec KNN (primary) → FTS5 cosine rerank → FTS5 BM25
+
 ## Overview
 
-Agentrete is a local-first persistent memory engine for AI coding agents. It exposes MCP tools over HTTP/stdio, stores context in a single SQLite file with FTS5 full-text search, and optionally computes embedding vectors via remote API (Ollama / OpenAI / Anthropic) in a background worker.
+Agentrete is a local-first persistent memory engine for AI coding agents. It exposes MCP tools over HTTP/stdio, stores context in a single SQLite file with sqlite-vec KNN search + FTS5 full-text fallback, and optionally computes embedding vectors via remote API (Ollama / OpenAI / Anthropic) in a background worker.
+
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -28,12 +31,12 @@ Agentrete is a local-first persistent memory engine for AI coding agents. It exp
               │ (storage.rs)   │
               └───────┬────────┘
                       │
-          ┌───────────┼───────────┐
-          ▼           ▼           ▼
-    ┌──────────┐ ┌──────────┐ ┌──────────┐
-    │ SQLite   │ │ FTS5     │ │ Embed    │
-    │ (sqlx)   │ │ (BM25)   │ │ Worker   │
-    └──────────┘ └──────────┘ └──────────┘
+        ┌─────────────┼──────────────┐
+        ▼             ▼              ▼
+  ┌──────────┐ ┌───────────┐ ┌───────────┐
+  │ SQLite   │ │ sqlite-vec│ │ Embed     │
+  │ (sqlx)   │ │  (KNN)    │ │ Worker    │
+  └──────────┘ └───────────┘ └───────────┘
 ```
 
 ## Source Tree
@@ -46,7 +49,7 @@ src/
 │   ├── setup_wizard.rs  Auto-detect AI tools, configure MCP + hooks
 │   ├── hooks.rs         Hook script installer (embedded at compile time)
 │   └── daemon.rs        Cross-platform background service management
-├── config.rs            Config loading (TOML/YAML/JSON + env), RemoteVendor, EmbeddingConfig
+├── config.rs            Config loading (TOML/YAML/JSON + env), EmbeddingConfig
 ├── mcp/
 │   ├── mod.rs           Module declarations, re-exports
 │   ├── handlers.rs      RPC dispatch, tools, version negotiation
@@ -55,7 +58,7 @@ src/
 │   ├── v2024.rs         2024-11-05 protocol (HTTP+SSE)
 │   ├── v2025_06.rs      2025-06-18 protocol (Streamable HTTP)
 │   └── v2025_11.rs      2025-11-25 protocol (Stable)
-├── storage.rs           SQLite via sqlx, FTS5, embed_pending(), partial index
+├── storage.rs           SQLite via sqlx, sqlite-vec KNN, FTS5 fallback, embed_pending()
 ├── embed/
 │   ├── mod.rs           candle BERT model loader (local backend)
 │   ├── models.rs        Model presets constants
@@ -86,72 +89,60 @@ hooks/
     ├── hooks.codex.json      Codex hook manifest (PowerShell)
     ├── session-start.ps1
     ├── prompt-submit.ps1
-    ├── ...                   (mirror of unix/ scripts in PowerShell)
-    └── claude-post-tool.ps1
+    ├── pre-tool-use.ps1
+    ├── post-tool-use.ps1
+    ├── pre-compact.ps1
+    ├── post-compact.ps1
+    ├── subagent-start.ps1
+    ├── subagent-stop.ps1
+    └── stop.ps1
+
+ext/
+├── vec0-linux-x86_64.so      sqlite-vec extension (embedded at compile time)
+└── vec0.so                   Generic fallback copy
 ```
 
-## Data Flow
+## Search Architecture
 
-### Memory Save (without embedding — fast path)
-
-```
-User/Codex "remember: xxx"
-        │
-        ▼
-  memory_save(content, type, tags)
-        │
-        ▼
-  Store::save()
-    ├─ SQLite INSERT INTO memories (embedding = NULL)
-    ├─ FTS5 INSERT for full-text index
-    └─ Return mem_{uuid}
-```
-
-### Memory Save with Embedding Worker
+Memory search uses a **3-tier auto-selecting dispatch**:
 
 ```
-Store::save()
-  │
-  ├─ INSERT (embedding = NULL)  ← fast, no embedding wait
-  │
-  ▼
-[Background: embed worker loop]
-  │   SELECT id, content FROM memories
-  │   WHERE embedding IS NULL OR embedding_model != ? OR embedding_dims != ?
-  │   ORDER BY embedding IS NULL DESC, created_at ASC
-  │   LIMIT 500
-  │
-  ├─ Ollama /api/embed batch (500 inputs → 500 vectors)
-  │
-  └─ UPDATE memories SET embedding=?, embedding_model=?, embedding_dims=?
-      (per-row, within a single batch)
+search(query)
+    │
+    ├─ embedder available + vec_enabled?
+    │   YES → vec0 KNN (cosine from L2)
+    │          ├─ hit  → return results
+    │          └─ miss → fall through
+    │
+    ├─ embedder available?
+    │   YES → FTS5 recall + cosine rerank (hybrid)
+    │          └─ return results
+    │
+    └─ FALLBACK → FTS5 BM25 keyword only
 ```
 
-### Embed Worker Behavior
+### Tier 1: sqlite-vec KNN
 
-| Condition | Action |
-|-----------|--------|
-| `embedding IS NULL` rows exist | Query 500, batch embed, UPDATE |
-| No pending rows | Sleep 5s, retry |
-| Embed API error | Sleep 10s, retry with same batch |
-| Model changed in config | `embedding_model != ?` catches old rows → full recompute |
-| Dimension mismatch | `embedding_dims != ?` catches stale rows |
+- **Extension**: `sqlite-vec` v0.1.10-alpha.4, statically embedded via `include_bytes!()`
+- **Loading**: Extracted to system temp dir at startup, loaded via `SqliteConnectOptions::extension_with_entrypoint("sqlite3_vec_init")` on sqlx 0.9 with `sqlite-load-extension` feature
+- **Query flow**: embed query → normalize to L2 unit vector → `vec_memories MATCH ?1 AND k = ?2` → score = `max(0, 1 - L2²/2)` (cosine-equivalent)
+- **Data flow**: embed worker writes `vec_memories` rows alongside `memories.embedding` BLOB
 
-### Memory Search
+### Tier 2: Hybrid FTS5 + Cosine Rerank
+
+- FTS5 BM25 recall → embed query → cosine similarity on top-N candidate embeddings → return sorted
+
+### Tier 3: FTS5 BM25 Only
+
+- `unicode61` tokenizer, single pass `ORDER BY rank`
+
+### Current Status
+
+sqlite-vec KNN is **active and working**. Verified on Debian 12 x86_64 with 11000+ memories:
 
 ```
-User/Codex "search memories for: xxx"
-        │
-        ▼
-  memory_search(query, limit)
-        │
-        ▼
-  Store::search()
-    ├─ [if embedder] embed_one(query) → query vector (local 50ms / remote 50ms)
-    ├─ FTS5 recall (3× limit) → candidate rows with embeddings
-    ├─ Cosine similarity rerank on cached vectors (<1ms for 100 rows)
-    ├─ Fallback: rows without embeddings use BM25 score (0.50)
-    └─ Return top N sorted by cosine + BM25 fallback
+search: vec0 KNN hit (5 results, top score=0.774)
+```
 
 ## Transports
 
@@ -178,11 +169,11 @@ Version negotiation: client sends `protocolVersion` in `initialize` → server m
 |---------|--------|-----------|-------|------|
 | **None** | `backend = "none"` | — | — | — |
 | **Local** (candle) | `backend = "local"` | 512d (bge-small) | Sequential | — |
-| **Remote Ollama** | `backend = "remote"`, `remote_vendor = "ollama"` | 768/4096 | ✅ native batch | None |
-| **Remote OpenAI** | `backend = "remote"`, `remote_vendor = "openai"` | model-dependent | ✅ native batch | API key |
-| **Remote Anthropic** | `backend = "remote"`, `remote_vendor = "anthropic"` | model-dependent | ✅ native batch | API key |
+| **Remote Ollama** | `backend = "remote"`, `vendor = "ollama"` | 768/4096 | ✅ native batch | None |
+| **Remote OpenAI** | `backend = "remote"`, `vendor = "openai"` | model-dependent | ✅ native batch | API key |
+| **Remote Anthropic** | `backend = "remote"`, `vendor = "anthropic"` | model-dependent | ✅ native batch | API key |
 
-**Remote vendor auto-detection**: If `remote_vendor` is not explicitly set, the URL is inspected:
+**Remote vendor auto-detection**: If `vendor` is not explicitly set, the URL is inspected:
 - Contains `:11434` or `ollama` → Ollama
 - Contains `anthropic` → Anthropic
 - Otherwise → OpenAI
@@ -193,11 +184,12 @@ Benchmarks on 8-CPU Debian 12, Ollama (`qwen3-embedding:latest`, 4096d) on LAN:
 
 | Operation | Throughput | Notes |
 |-----------|-----------|-------|
-| Save (HTTP) | **155-162 req/s** | 200 concurrent, embedding deferred to worker |
-| Embed worker digest | **~100 vectors/s** | Batch 500, ~5s per round |
-| Search (HTTP) | **37,700 req/s** | 100 concurrent, FTS5 only |
+| Save (HTTP) | **~4,700 req/s** | 20 concurrent, embedding deferred to worker |
+| Embed worker digest | **~56 vectors/s** | Batch 500, ~9s per round (remote Ollama LAN) |
+| Search (vec0 KNN) | **~5 req/s** | Per-search: embed query + KNN + score calc |
+| Search (FTS5 only) | **~37,700 req/s** | 100 concurrent, BM25 keyword only |
 
-Key design: **save never waits for embedding**. Embedding is computed asynchronously by a background worker polling for `embedding IS NULL` rows, calling the remote API in batches of 500.
+Key design: **save never waits for embedding**. Embedding is computed asynchronously by a background worker polling for `embedding IS NULL` rows, calling the remote API in batches of 500. Model change triggers automatic recompute (`WHERE embedding_model IS NOT ?`).
 
 ## Hooks Integration
 
@@ -229,7 +221,7 @@ No hooks fail due to missing runtime dependencies.
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| `sqlx` (sqlite) | 0.8 | Async SQLite with connection pool |
+| `sqlx` (sqlite, sqlite-load-extension) | 0.9 | Async SQLite with connection pool + extension loading |
 | `axum` | 0.8 | HTTP server (Streamable HTTP transport) |
 | `candle-core` / `candle-transformers` / `candle-nn` | 0.10 | On-device BERT embedding (local backend) |
 | `tokenizers` | 0.19 | HuggingFace tokenizer |
@@ -243,13 +235,13 @@ No hooks fail due to missing runtime dependencies.
 
 ## Key Design Decisions
 
-1. **SQLite + sqlx**: Pure Rust async, connection pool, WAL mode: Pure Rust async, no `!Sync` issues, axum compatible, simpler deployment
-2. **FTS5 over vector search as primary**: BM25 keyword match is fast, sufficient for structured memory; embedding vectors are computed asynchronously as secondary signal
-3. **Embed worker, not inline**: Save never blocks on embedding API call; background poll-loop batched Ollama 500 at a time
-4. **Partial index on NULL**: `CREATE INDEX ... WHERE embedding IS NULL` — only pending rows indexed
-5. **Model change = automatic recompute**: `WHERE embedding IS NULL OR embedding_model IS NOT ?` catches old vectors
-6. **axum + sqlx Send+Sync stack**: Full async, connection pool, WAL mode, no Mutex needed
-7. **Remote vendor pluggable**: OpenAI / Anthropic / Ollama each in own module, auto-detected from URL
-8. **Version-negotiated MCP**: Clean separation per protocol version, easy to add future versions
-9. **Hooks embedded at compile time**: All scripts via `include_str!()`, no external files needed at deploy time
-10. **jemalloc**: Faster memory allocation for long-running server processes
+1. **SQLite + sqlx 0.9 with sqlite-vec**: Pure Rust async, `sqlite-load-extension` feature enabled, `extension_with_entrypoint("sqlite3_vec_init")` at pool creation time. Extension `.so` embedded via `include_bytes!()` and extracted to temp dir at runtime.
+2. **sqlite-vec KNN as primary search**: L2-normalized query embedding → vec0 virtual table MATCH → cosine-equivalent scoring. Falls back to FTS5 on error/empty.
+3. **Embed worker, not inline**: Save never blocks on embedding API call; background poll-loop calls remote Ollama/OpenAI/Anthropic in batched mode.
+4. **Partial index on NULL**: `CREATE INDEX ... WHERE embedding IS NULL` — only pending rows indexed for efficient worker polling.
+5. **Model change = automatic recompute**: `WHERE embedding IS NULL OR embedding_model IS NOT ?` catches old vectors when model or dimension changes.
+6. **axum + sqlx Send+Sync stack**: Full async, connection pool, WAL mode, no Mutex needed.
+7. **Remote vendor pluggable**: OpenAI / Anthropic / Ollama each in own module, auto-detected from URL.
+8. **Version-negotiated MCP**: Clean separation per protocol version (2024-11-05, 2025-06-18, 2025-11-25), easy to add future versions.
+9. **Hooks embedded at compile time**: All scripts via `include_str!()`, no external files needed at deploy time.
+10. **jemalloc**: Faster memory allocation for long-running server processes.
