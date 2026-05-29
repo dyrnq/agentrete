@@ -299,6 +299,38 @@ impl Store {
     }
 
     // ─── embed worker (public, called from mcp server) ──────────────────────
+    /// Deduplicate memories by content+type, keeping the oldest (by created_at).
+    /// Also VACUUM to reclaim disk space.
+    pub async fn compact(&self) -> Result<(usize, usize)> {
+        // Count before
+        let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+            .fetch_one(&self.pool)
+            .await?;
+
+        // Dedup: keep MIN(rowid) per (content, type) group
+        sqlx::query(
+            "DELETE FROM memories WHERE rowid NOT IN (SELECT MIN(rowid) FROM memories GROUP BY content, COALESCE(type,''))",
+        )
+        .execute(&self.pool).await?;
+
+        let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+            .fetch_one(&self.pool)
+            .await?;
+
+        // Rebuild FTS5
+        sqlx::query("DELETE FROM memories_fts")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories")
+            .execute(&self.pool)
+            .await?;
+
+        // VACUUM
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+
+        let removed = (before - after) as usize;
+        Ok((removed, after as usize))
+    }
 
     /// Poll for rows without embeddings and compute them via remote API.
     pub async fn embed_pending(

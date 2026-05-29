@@ -11,7 +11,8 @@ pub(crate) fn tools_list() -> Value {
         {"name":"memory_save","description":"Save","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"type":{"type":"string"},"tags":{"type":"string"}},"required":["content"]}},
         {"name":"memory_list","description":"List","inputSchema":{"type":"object","properties":{"limit":{"type":"number"}},"required":[]}},
         {"name":"memory_forget","description":"Delete","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
-        {"name":"memory_stats","description":"Stats","inputSchema":{"type":"object","properties":{},"required":[]}}
+        {"name":"memory_stats","description":"Stats","inputSchema":{"type":"object","properties":{},"required":[]}},
+        {"name":"memory_compact","description":"Deduplicate memories and reclaim disk space","inputSchema":{"type":"object","properties":{},"required":[]}}
     ]})
 }
 
@@ -124,6 +125,13 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                         serde_json::json!({"content":[{"type":"text","text":format!("Deleted: {}",a["id"].as_str().unwrap_or(""))}]}),
                     ),
                     Err(e) => jsonrpc_err(&id, -32000, &format!("Forget failed: {}", e)),
+                },
+                "memory_compact" => match store.compact().await {
+                    Ok((removed, remaining)) => jsonrpc_ok(
+                        &id,
+                        serde_json::json!({"content":[{"type":"text","text":format!("Compacted: {} duplicates removed, {} memories remain.", removed, remaining)}]}),
+                    ),
+                    Err(e) => jsonrpc_err(&id, -32000, &format!("Compact failed: {}", e)),
                 },
                 "memory_stats" => match store.stats().await {
                     Ok(s) => {
