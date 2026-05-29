@@ -21,7 +21,11 @@ impl Embedder {
                 anyhow::bail!("Embedder::from_config called with backend=none")
             }
             crate::config::EmbeddingBackend::Local => {
-                let model = super::CandleEmbedBuilder::new().with_device_cpu().build()?;
+                let model = super::CandleEmbedBuilder::new()
+                    .custom_embedding_model(&cfg.local.model)
+                    .custom_model_revision(&cfg.local.revision)
+                    .with_device_cpu()
+                    .build()?;
                 Ok(Embedder::Local(Box::new(std::sync::Mutex::new(model))))
             }
             crate::config::EmbeddingBackend::Remote => {

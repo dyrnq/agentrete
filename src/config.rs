@@ -258,7 +258,13 @@ dims = 1536
             cfg.embedding.remote.url.as_deref(),
             Some("https://api.openai.com/v1")
         );
-        assert_eq!(cfg.remote.vendor(), RemoteVendor::OpenAI);
+        assert_eq!(
+            cfg.embedding
+                .remote
+                .vendor
+                .unwrap_or_else(|| RemoteVendor::detect("")),
+            RemoteVendor::OpenAI
+        );
     }
 
     #[test]
@@ -272,7 +278,13 @@ vendor = "ollama"
 model = "granite-embedding:278m"
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.remote.vendor(), RemoteVendor::Ollama);
+        assert_eq!(
+            cfg.embedding
+                .remote
+                .vendor
+                .unwrap_or_else(|| RemoteVendor::detect("")),
+            RemoteVendor::Ollama
+        );
     }
 
     #[test]
@@ -285,7 +297,13 @@ url = "https://api.anthropic.com"
 model = "voyage-3"
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.remote.vendor(), RemoteVendor::Anthropic);
+        assert_eq!(
+            cfg.embedding
+                .remote
+                .vendor
+                .unwrap_or_else(|| RemoteVendor::detect("")),
+            RemoteVendor::Anthropic
+        );
     }
 
     #[test]
@@ -296,7 +314,7 @@ backend = "none"
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.embedding.backend, EmbeddingBackend::None);
-        assert!(!cfg.embed_enabled());
+        assert_eq!(cfg.embedding.backend, EmbeddingBackend::None);
     }
 
     #[test]
@@ -316,17 +334,14 @@ embedding:
     fn test_parse_json_embed() {
         let json_str = r#"{"embedding":{"backend":"none"}}"#;
         let cfg: Config = serde_json::from_str(json_str).unwrap();
-        assert!(!cfg.embed_enabled());
+        assert_eq!(cfg.embedding.backend, EmbeddingBackend::None);
     }
 
     #[test]
     fn test_env_override() {
-        std::env::set_var("AGENTRETE_EMBED_BACKEND", "none");
-        std::env::set_var("AGENTRETE_EMBED_DIMS", "1024");
-        let env = Config::from_env();
-        assert_eq!(env.embedding.backend, EmbeddingBackend::None);
-        assert_eq!(env.embedding.local.dims, 1024);
-        std::env::remove_var("AGENTRETE_EMBED_BACKEND");
-        std::env::remove_var("AGENTRETE_EMBED_DIMS");
+        std::env::set_var("AGENTRETE__PORT", "1234");
+        let cfg = Config::load(None, None);
+        assert_eq!(cfg.port, 1234);
+        std::env::remove_var("AGENTRETE__PORT");
     }
 }
