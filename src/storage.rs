@@ -3,7 +3,7 @@
 use anyhow::Result;
 use chrono::Utc;
 
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -42,24 +42,36 @@ impl Store {
             .create_if_missing(true)
             .foreign_keys(true);
 
-        let ext_name = match (std::env::consts::OS, std::env::consts::ARCH) {
-            ("linux", "x86_64") => "ext/vec0-linux-x86_64.so",
-            ("linux", "aarch64") => "ext/vec0-linux-aarch64.so",
-            ("macos", "x86_64") => "ext/vec0-macos-x86_64.dylib",
-            ("macos", "aarch64") => "ext/vec0-macos-aarch64.dylib",
-            ("windows", "x86_64") => "ext/vec0-windows-x86_64.dll",
-            _ => "ext/vec0.so",
-        };
-        // Resolve extension path relative to the binary location
-        let ext_so = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-            .unwrap_or_default()
-            .join("..")
-            .join("..")
-            .join(ext_name);
-        // FIXME: sqlx pool worker crashes with extension() — disable for now
-        // if ext_so.exists() { ... extension loading ... }
+        // Load sqlite-vec extension via connection options (pre-pool)
+        let mut vec_enabled = false;
+        if !VEC_EXT_BYTES.is_empty() {
+            let tmp_dir = std::env::temp_dir().join("agentrete");
+            std::fs::create_dir_all(&tmp_dir).ok();
+            let ext_name = match (std::env::consts::OS, std::env::consts::ARCH) {
+                ("linux", "x86_64") => "vec0-linux-x86_64.so",
+                ("linux", "aarch64") => "vec0-linux-aarch64.so",
+                ("macos", "x86_64") => "vec0-macos-x86_64.dylib",
+                ("macos", "aarch64") => "vec0-macos-aarch64.dylib",
+                ("windows", "x86_64") => "vec0-windows-x86_64.dll",
+                _ => "vec0.so",
+            };
+            let ext_path = tmp_dir.join(ext_name);
+            match std::fs::write(&ext_path, VEC_EXT_BYTES) {
+                Ok(()) => {
+                    log::info!("sqlite-vec extension extracted to {}", ext_path.display());
+                    unsafe {
+                        opts = opts.extension_with_entrypoint(
+                            ext_path.to_string_lossy().into_owned(),
+                            "sqlite3_vec_init",
+                        );
+                    }
+                    vec_enabled = true;
+                }
+                Err(e) => {
+                    log::warn!("failed to write sqlite-vec extension: {e}");
+                }
+            }
+        }
 
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
         sqlx::query("PRAGMA journal_mode=WAL")
@@ -72,7 +84,8 @@ impl Store {
             .execute(&pool)
             .await?;
 
-        let vec_enabled = ext_so.exists(); // sqlite-vec disabled until sqlx pool bug is fixed
+        // vec_enabled already set during extension loading above
+
         let store = Self {
             pool,
             path,
@@ -80,9 +93,6 @@ impl Store {
             vec_enabled,
             vec_dims: dims,
         };
-        if vec_enabled {
-            store.init_vec().await?;
-        }
         if vec_enabled {
             store.init_vec().await?;
         }
@@ -128,11 +138,12 @@ impl Store {
     }
 
     async fn init_vec(&self) -> Result<()> {
-        let sql = format!(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[{}])",
-            self.vec_dims
-        );
-        sqlx::query(&sql).execute(&self.pool).await?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[{dims}])",
+            dims = self.vec_dims,
+        )))
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -143,13 +154,15 @@ impl Store {
         limit: u8,
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
+        let _ = memory_type;
         let mut query_vec = query_vec_orig.to_vec();
         normalize_l2(&mut query_vec);
         let query_vec = query_vec.as_slice();
-        let dims = query_vec.len();
+        let _dims = query_vec.len();
         let json_vec: String = serde_json::to_string(&query_vec)?;
         let lim = limit.min(50) as i64;
 
+        #[allow(clippy::type_complexity)]
         // KNN via vec0 virtual table
         let rows: Vec<(String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<f64>, Option<String>, f64)> =
             sqlx::query_as(
@@ -173,7 +186,7 @@ impl Store {
                         files: parse_json(&files),
                         project,
                         importance: importance.unwrap_or(0.5),
-                        score: (1.0 - (distance as f64).powi(2) / 2.0).max(0.0),
+                        score: (1.0 - distance.powi(2) / 2.0).max(0.0),
                         created_at: created_at.unwrap_or_default(),
                         embedding: None,
                     }
