@@ -227,6 +227,14 @@ const SEED_RULES: &[(&str, &str, &str)] = &[
     ("Writing Plans: Break multi-step work into atomic tasks with clear verification criteria", "rule", "superpowers,planning"),
     ("Surgical Changes Only: Change only what's needed, don't refactor in passing", "rule", "superpowers,coding"),
     ("Subagent-Driven Dev: Fan out parallel work to subagents when tasks are independent", "rule", "superpowers,parallel"),
+    // Code modification rules (CRITICAL)
+    ("Code Modification: NEVER use sed or python3 to modify source code — high failure rate, silently corrupts code", "rule", "coding,code-modification,CRITICAL"),
+    ("Code Modification: Use apply_patch (Unified Diff) as the only legal way to modify source files — context-line validation catches errors", "rule", "coding,code-modification,CRITICAL"),
+    ("Code Modification: If apply_patch is unavailable, rewrite the entire file instead of patching", "rule", "coding,code-modification,CRITICAL"),
+    ("Doc Paths: Never use private paths like /home/bill or 192.168.x.x in documentation — use ~ or localhost", "rule", "coding,docs,CRITICAL"),
+    ("AST Tools: Prefer ast-grep for code navigation and refactoring — saves tokens vs reading whole files", "rule", "coding,tools"),
+    ("Validation: After any code change, run in order: cargo fmt -> cargo clippy --all-targets -- -D warnings -> cargo build", "rule", "coding,validation,CRITICAL"),
+    ("Validation: On any validation failure, revert the change immediately before debugging", "rule", "coding,validation,CRITICAL"),
 ];
 
 fn main() -> anyhow::Result<()> {
@@ -410,7 +418,8 @@ Status: ✅ agentrete is healthy"
                     })
                     .await?;
                 nc += 1;
-                println!("  NEW  {}", &content[..content.len().min(60)]);
+                                let preview: String = content.chars().take(60).collect();
+                println!("  NEW  {preview}");
             }
             println!("Done: {nc} new, {sc} skipped.");
         }
