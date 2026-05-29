@@ -130,10 +130,13 @@ impl Store {
             let _ = self.embedder.set(emb);
         }
 
-        let embedding_vec = self
-            .embedder
-            .get()
-            .and_then(|emb| emb.embed_one(input.content.as_str()).ok());
+        let embedding_vec = match self.embedder.get() {
+            Some(emb) => match emb.embed_one(input.content.as_str()).await {
+                Ok(v) => Some(v),
+                Err(e) => { eprintln!("embed error: {}", e); None }
+            },
+            None => None,
+        };
 
         if let Some(vec) = &embedding_vec {
             let dims = vec.len() as i32;
@@ -197,10 +200,13 @@ impl Store {
                 .context("Failed to load embedder")?;
             let _ = self.embedder.set(emb);
         }
-        let query_embedding = self
-            .embedder
-            .get()
-            .and_then(|emb| emb.embed_one(query).ok());
+        let query_embedding = match self.embedder.get() {
+            Some(emb) => match emb.embed_one(query).await {
+                Ok(v) => Some(v),
+                Err(e) => { eprintln!("embed error: {}", e); None }
+            },
+            None => None,
+        };
         crate::search::search_fts(&self.conn, query, limit, memory_type, query_embedding)
     }
 
