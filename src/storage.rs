@@ -316,14 +316,13 @@ impl Store {
             );
         }
 
-        let model_bytes = model_name.as_bytes();
         let dims_i64 = dims as i64;
 
         for ((id, _), vec) in rows.iter().zip(vectors.iter()) {
             let blob: Vec<u8> = vec.iter().flat_map(|f| f32::to_le_bytes(*f)).collect();
             sqlx::query("UPDATE memories SET embedding=?1, embedding_model=?2, embedding_dims=?3 WHERE id=?4")
                 .bind(&blob)
-                .bind(model_bytes)
+                .bind(model_name)
                 .bind(dims_i64)
                 .bind(id)
                 .execute(&self.pool)
