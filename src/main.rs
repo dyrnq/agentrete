@@ -7,7 +7,6 @@ mod cli;
 mod config;
 mod embed;
 mod mcp;
-mod search;
 mod storage;
 mod types;
 

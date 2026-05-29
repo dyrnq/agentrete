@@ -39,6 +39,9 @@ pub struct SearchResult {
     pub importance: f64,
     pub score: f64,
     pub created_at: String,
+    /// Raw embedding BLOB for on-the-fly cosine computation
+    #[serde(skip)]
+    pub embedding: Option<Vec<u8>>,
 }
 
 /// Database statistics.
