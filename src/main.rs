@@ -388,11 +388,22 @@ Status: ✅ agentrete is healthy"
             let embed_handle = if cfg.embedding.backend != crate::config::EmbeddingBackend::None {
                 let embedder = crate::embed::embeddings::Embedder::from_config(&cfg.embedding)?;
                 let store2 = store.clone();
-                let model = cfg
-                    .embedding.remote.model
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string());
-                let dims = cfg.embedding.local.dims as usize;
+                let (model, dims) =
+                    if cfg.embedding.backend == crate::config::EmbeddingBackend::Remote {
+                        (
+                            cfg.embedding
+                                .remote
+                                .model
+                                .clone()
+                                .unwrap_or_else(|| "unknown".into()),
+                            cfg.embedding.remote.dims.unwrap_or(768) as usize,
+                        )
+                    } else {
+                        (
+                            cfg.embedding.local.model.clone(),
+                            cfg.embedding.local.dims as usize,
+                        )
+                    };
                 Some(tokio::spawn(async move {
                     eprintln!("embed-worker: started (model={model}, dims={dims})");
                     loop {

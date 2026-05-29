@@ -82,7 +82,6 @@ pub struct LocalConfig {
     pub endpoint: String,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
     /// Backend type: none, local, remote.
@@ -157,7 +156,7 @@ impl Default for Config {
 impl Config {
     /// Load config from all sources: file → env vars → CLI args.
     pub fn load(cli_port: Option<u16>, cli_config: Option<&str>) -> Self {
-        use ::config::{Config as ConfigBuilder, File, Environment};
+        use ::config::{Config as ConfigBuilder, Environment, File};
 
         let mut builder = ConfigBuilder::builder();
 
@@ -170,7 +169,9 @@ impl Config {
         }
 
         builder = builder.add_source(
-            Environment::with_prefix("AGENTRETE").separator("__").try_parsing(true),
+            Environment::with_prefix("AGENTRETE")
+                .separator("__")
+                .try_parsing(true),
         );
 
         let mut cfg: Self = builder
@@ -184,7 +185,6 @@ impl Config {
 
         cfg
     }
-
 
     pub fn db_dir(&self) -> PathBuf {
         self.db_dir.clone().unwrap_or_else(|| {
