@@ -69,9 +69,9 @@ pub struct RemoteConfig {
     pub dims: Option<u16>,
 }
 
-/// Local model sub-config (TOML: [embedding.local] or [embedding.model2vec]).
+/// Local model sub-config (TOML: [embedding.model2vec] or [embedding.model2vec]).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct LocalConfig {
+pub struct Model2VecConfig {
     #[serde(default = "default_model_id")]
     pub model: String,
     #[serde(default = "default_revision")]
@@ -95,7 +95,7 @@ pub struct EmbeddingConfig {
     #[serde(default)]
     pub remote: RemoteConfig,
     #[serde(default)]
-    pub local: LocalConfig,
+    pub model2vec: Model2VecConfig,
 }
 
 fn default_model_id() -> String {
@@ -115,7 +115,7 @@ impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
             backend: EmbeddingBackend::Model2Vec,
-            local: LocalConfig {
+            model2vec: Model2VecConfig {
                 model: "BAAI/bge-small-zh-v1.5".to_string(),
                 dims: 512,
                 ..Default::default()
@@ -242,8 +242,8 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.port, 9092);
         assert_eq!(cfg.embedding.backend, EmbeddingBackend::Model2Vec);
-        assert_eq!(cfg.embedding.local.model, "BAAI/bge-small-zh-v1.5");
-        assert_eq!(cfg.embedding.local.dims, 512);
+        assert_eq!(cfg.embedding.model2vec.model, "BAAI/bge-small-zh-v1.5");
+        assert_eq!(cfg.embedding.model2vec.dims, 512);
     }
 
     #[test]
@@ -261,7 +261,7 @@ dims = 1536
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.embedding.backend, EmbeddingBackend::Remote);
-        assert_eq!(cfg.embedding.local.dims, 1536);
+        assert_eq!(cfg.embedding.model2vec.dims, 1536);
         assert_eq!(
             cfg.embedding.remote.url.as_deref(),
             Some("https://api.openai.com/v1")
@@ -334,8 +334,8 @@ embedding:
   dims: 512
 "#;
         let cfg: Config = serde_yaml::from_str(yaml_str).unwrap();
-        assert_eq!(cfg.embedding.local.model, "BAAI/bge-small-zh-v1.5");
-        assert_eq!(cfg.embedding.local.dims, 512);
+        assert_eq!(cfg.embedding.model2vec.model, "BAAI/bge-small-zh-v1.5");
+        assert_eq!(cfg.embedding.model2vec.dims, 512);
     }
 
     #[test]

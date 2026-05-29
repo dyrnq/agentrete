@@ -20,7 +20,7 @@ db_dir = "/tmp/test-db"
 [embedding]
 backend = "model2vec"
 
-[embedding.local]
+[embedding.model2vec]
 model = "BAAI/bge-small-zh-v1.5"
 dims = 256
 model2vec_path = "/tmp/m2v-bge-small-zh"

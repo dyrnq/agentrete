@@ -11,15 +11,15 @@ pub struct Model2VecEmbed {
 
 impl Model2VecEmbed {
     pub fn new(cfg: &EmbeddingConfig) -> Result<Self> {
-        let path = cfg.local.model2vec_path.as_deref().unwrap_or_else(|| {
+        let path = cfg.model2vec.model2vec_path.as_deref().unwrap_or_else(|| {
             // Default: look for distilled model alongside the source model name
             // e.g. BAAI/bge-small-zh-v1.5 → ~/.agentrete/models/bge-small-zh-v1.5-m2v
             let _model_name = cfg
-                .local
+                .model2vec
                 .model
                 .rsplit('/')
                 .next()
-                .unwrap_or(&cfg.local.model);
+                .unwrap_or(&cfg.model2vec.model);
             "/not/found/m2v"
         });
 

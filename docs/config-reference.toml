@@ -10,14 +10,16 @@ port = 9092
 # ─── Embedding ───────────────────────────────────────────────────────────────
 
 [embedding]
-backend = "remote"      # "none" | "model2vec" | "remote"
+backend = "model2vec"   # "none" | "model2vec" | "remote"
 
-# ── Local backend ────────────────────────────────────────────────────────────
-[embedding.local]
-# model = "BAAI/bge-small-zh-v1.5"   # HF model ID (93MB, 512d)
+# ── Model2Vec backend (default, recommended) ─────────────────────────────────
+[embedding.model2vec]
+model = "BAAI/bge-small-zh-v1.5"    # source sentence-transformers model
+dims = 256                           # distilled dimension (256 = PCA from 512)
 # revision = "main"
-# dims = 512
+# model2vec_path = "/path/to/distilled/model"  # optional: pre-distilled model path
 # endpoint = "https://hf-mirror.com"
+
 
 # ── Remote backend ───────────────────────────────────────────────────────────
 [embedding.remote]
@@ -33,13 +35,15 @@ dims = 4096
 # [embedding]
 # backend = "none"
 
-# Local offline model:
+# Model2Vec with custom pre-distilled path:
 # [embedding]
-# backend = "local"  # REMOVED — use "model2vec" instead
+# backend = "model2vec"
 #
-# [embedding.local]
+# [embedding.model2vec]
 # model = "BAAI/bge-small-zh-v1.5"
-# dims = 512
+# dims = 256
+# model2vec_path = "/tmp/m2v-bge-small-zh"
+
 
 # OpenAI API:
 # [embedding]

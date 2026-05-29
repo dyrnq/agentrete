@@ -33,7 +33,7 @@ impl Store {
                 cfg.embedding.remote.dims.unwrap_or(768) as usize
             }
             crate::config::EmbeddingBackend::None => 0,
-            _ => cfg.embedding.local.dims as usize,
+            _ => cfg.embedding.model2vec.dims as usize,
         };
         let path = cfg.db_dir().join("memory.db");
         if let Some(parent) = path.parent() {

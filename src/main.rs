@@ -460,11 +460,11 @@ Status: ✅ agentrete is healthy"
                         crate::config::EmbeddingBackend::Model2Vec => (
                             format!(
                                 "model2vec:{}:{}d",
-                                cfg.embedding.local.model, cfg.embedding.local.dims
+                                cfg.embedding.model2vec.model, cfg.embedding.model2vec.dims
                             ),
-                            cfg.embedding.local.dims as usize,
+                            cfg.embedding.model2vec.dims as usize,
                         ),
-                        crate::config::EmbeddingBackend::None => (String::new(), 0)
+                        crate::config::EmbeddingBackend::None => (String::new(), 0),
                     };
                     Some(tokio::spawn(async move {
                         log::info!("embed-worker: started (identifier={model}, dims={dims})");
