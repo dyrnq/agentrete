@@ -147,9 +147,11 @@ User/Codex "search memories for: xxx"
         │
         ▼
   Store::search()
-    ├─ FTS5 MATCH query → BM25 keyword ranking
-    └─ Return top N with scores
-```
+    ├─ [if embedder] embed_one(query) → query vector (local 50ms / remote 50ms)
+    ├─ FTS5 recall (3× limit) → candidate rows with embeddings
+    ├─ Cosine similarity rerank on cached vectors (<1ms for 100 rows)
+    ├─ Fallback: rows without embeddings use BM25 score (0.50)
+    └─ Return top N sorted by cosine + BM25 fallback
 
 ## Transports
 
