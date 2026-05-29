@@ -125,6 +125,17 @@ impl Store {
     }
 
     pub async fn forget(&self, id: &str) -> Result<()> {
+        // Delete from FTS5 index first (by rowid)
+        let rowid: Option<i64> = sqlx::query_scalar("SELECT rowid FROM memories WHERE id=?1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        if let Some(rid) = rowid {
+            sqlx::query("DELETE FROM memories_fts WHERE rowid=?1")
+                .bind(rid)
+                .execute(&self.pool)
+                .await?;
+        }
         sqlx::query("DELETE FROM memories WHERE id=?1")
             .bind(id)
             .execute(&self.pool)
