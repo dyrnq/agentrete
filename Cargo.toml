@@ -1,0 +1,41 @@
+[package]
+name = "agentrete"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Local-first persistent memory for AI coding agents - DuckDB + BM25 + MCP"
+rust-version = "1.76"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+duckdb = { version = "1", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+futures = "0.3.32"
+actix-web = "4"
+candle-core = { version = "0.10", package = "candle-core" }
+candle-transformers = "0.10"
+candle-nn = { version = "0.10", package = "candle-nn" }
+hf-hub = { version = "0.5", features = ["tokio", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false }
+tokenizers = "0.19"
+rmcp = "1.7.0"
+dirs = "6.0.0"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.dev.build-override]
+opt-level = 3
+
+[profile.release.build-override]
+opt-level = 3
+
