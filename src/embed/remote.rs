@@ -145,6 +145,7 @@ mod tests {
     }
 
     #[test]
+    #[test]
     fn test_nomic_embed_real() {
         let client = reqwest::blocking::Client::new();
         if client
@@ -160,3 +161,5 @@ mod tests {
         assert_eq!(vec.len(), 768);
     }
 }
+
+
