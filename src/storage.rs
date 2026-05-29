@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use chrono::Utc;
+
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -41,7 +42,7 @@ impl Store {
         if ext_so.exists() {
             let ext_path = ext_so.to_string_lossy().to_string();
             opts = opts.extension(ext_path.clone());
-            eprintln!("sqlite-vec extension loaded from {ext_path}");
+            log::info!("sqlite-vec extension loaded from {ext_path}");
         }
 
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
@@ -175,15 +176,15 @@ impl Store {
                 if let Ok(query_vec) = emb.embed_one(query).await {
                     match self.search_vec(&query_vec, limit, memory_type).await {
                         Ok(results) if !results.is_empty() => {
-                            eprintln!(
+                            log::info!(
                                 "search: vec0 KNN hit ({} results, top score={:.3})",
                                 results.len(),
                                 results.first().map(|r| r.score).unwrap_or(0.0)
                             );
                             return Ok(results);
                         }
-                        Ok(_) => eprintln!("search: vec0 KNN empty, falling back to hybrid"),
-                        Err(e) => eprintln!("search: vec0 KNN error ({e}), falling back to hybrid"),
+                        Ok(_) => log::info!("search: vec0 KNN empty, falling back to hybrid"),
+                        Err(e) => log::info!("search: vec0 KNN error ({e}), falling back to hybrid"),
                     }
                 }
             }
@@ -191,7 +192,7 @@ impl Store {
         // Fallback: hybrid (cosine rerank) if embedder is available
         if let Some(ref emb) = self.embedder {
             let results = self.search_hybrid(emb, query, limit, memory_type).await?;
-            eprintln!(
+            log::info!(
                 "search: hybrid cosine ({} results, top score={:.3})",
                 results.len(),
                 results.first().map(|r| r.score).unwrap_or(0.0)
@@ -200,7 +201,7 @@ impl Store {
         }
         // Final fallback: FTS5 BM25 only
         let results = self.search_fts(query, limit, memory_type).await?;
-        eprintln!("search: FTS5 BM25-only ({} results)", results.len());
+        log::info!("search: FTS5 BM25-only ({} results)", results.len());
         Ok(results)
     }
 
@@ -543,7 +544,7 @@ impl Store {
         let texts: Vec<&str> = rows.iter().map(|(_, c)| c.as_str()).collect();
 
         let vectors = embedder.embed_batch(&texts).await?;
-        eprintln!(
+        log::info!(
             "embed_pending: got {} vectors, dim={} from model={}",
             vectors.len(),
             vectors.first().map(|v| v.len()).unwrap_or(0),

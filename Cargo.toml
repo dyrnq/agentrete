@@ -19,7 +19,7 @@ anyhow = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-tracing = "0.1"
+tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3.32"
 candle-core = { version = "0.10", package = "candle-core" }
@@ -34,6 +34,7 @@ axum = { version = "0.8.9", features = ["macros"] }
 tikv-jemallocator = "0.7.0"
 config = { version = "0.15.20", features = ["toml", "yaml", "json"] }
 sqlite-vec = "0.1.9"
+log = "0.4.30"
 
 [dev-dependencies]
 tempfile = "3"

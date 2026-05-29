@@ -1,4 +1,5 @@
 use crate::storage::Store;
+
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -6,7 +7,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use super::handlers::{handle_rpc, jsonrpc_err};
 
 pub async fn run_stdio(store: Store) -> anyhow::Result<()> {
-    eprintln!("agentrete MCP server (stdio)");
+    log::info!("agentrete MCP server (stdio)");
     let store = Arc::new(store);
     let stdin = BufReader::new(tokio::io::stdin());
     let mut stdout = tokio::io::stdout();

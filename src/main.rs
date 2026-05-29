@@ -465,7 +465,7 @@ Status: ✅ agentrete is healthy"
                             )
                         };
                     Some(tokio::spawn(async move {
-                        eprintln!("embed-worker: started (model={model}, dims={dims})");
+                        log::info!("embed-worker: started (model={model}, dims={dims})");
                         loop {
                             match store2.embed_pending(&embedder, &model, dims, 500).await {
                                 Ok(0) => {
@@ -473,10 +473,10 @@ Status: ✅ agentrete is healthy"
                                     tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                                 }
                                 Ok(n) => {
-                                    eprintln!("embed-worker: flushed {n} vectors");
+                                    log::info!("embed-worker: flushed {n} vectors");
                                 }
                                 Err(e) => {
-                                    eprintln!("embed-worker: error flushing: {e}");
+                                    log::info!("embed-worker: error flushing: {e}");
                                     tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
                                 }
                             }
@@ -489,9 +489,7 @@ Status: ✅ agentrete is healthy"
             let result = match port {
                 Some(_p) => mcp::run_http(store, &cfg).await,
                 None => {
-                    eprintln!(
-                        "agentrete: stdio mode (embed worker disabled, use HTTP for embeddings)"
-                    );
+                    log::info!("agentrete: stdio mode (embed worker disabled, use HTTP for embeddings)");
                     mcp::run_stdio(store).await
                 }
             };

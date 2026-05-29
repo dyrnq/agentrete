@@ -1,5 +1,6 @@
 use crate::storage::Store;
 use axum::{extract::State, routing::post, Router};
+
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -7,7 +8,7 @@ use super::handlers::handle_rpc;
 
 pub async fn run_http(store: Store, config: &crate::config::Config) -> anyhow::Result<()> {
     let port = config.port;
-    eprintln!("agentrete MCP server on http://127.0.0.1:{}", port);
+    log::info!("agentrete MCP server on http://127.0.0.1:{}", port);
     let state = Arc::new(store);
     let app = Router::new()
         .route("/", post(http_mcp_handler).get(http_health))
