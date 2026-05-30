@@ -204,6 +204,7 @@ impl Store {
         let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_predicate ON kg_triples(predicate)").execute(&self.pool).await;
         let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_memory ON kg_triples(source_memory_id)").execute(&self.pool).await;
         let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_project ON kg_triples(project)").execute(&self.pool).await;
+        let _ = sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_triples_spo ON kg_triples(subject, predicate, object)").execute(&self.pool).await;
         Ok(())
     }
 
@@ -219,7 +220,7 @@ impl Store {
     ) -> Result<String> {
         let id = format!("triple_{}", uuid::Uuid::new_v4());
         let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query("INSERT INTO kg_triples (id,subject,predicate,object,confidence,source_memory_id,project,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)")
+        sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,source_memory_id,project,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)")
             .bind(&id).bind(subject).bind(predicate).bind(object).bind(confidence).bind(&source_memory_id).bind(&project).bind(&now)
             .execute(&self.pool).await?;
         self.graph.add_triple_local(subject, predicate, object, confidence, source_memory_id);

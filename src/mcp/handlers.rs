@@ -15,8 +15,7 @@ pub(crate) fn tools_list() -> Value {
         {"name":"memory_stats","description":"Stats","inputSchema":{"type":"object","properties":{},"required":[]}},
         {"name":"memory_compact","description":"Deduplicate memories (exact or semantic) and reclaim disk space","inputSchema":{"type":"object","properties":{"mode":{"type":"string"}},"required":[]}},
         {"name":"kg_query","description":"Query knowledge graph: neighbors, shortest path, or subgraph","inputSchema":{"type":"object","properties":{"mode":{"type":"string"},"entity":{"type":"string"},"target":{"type":"string"},"predicate":{"type":"string"},"direction":{"type":"string"},"project":{"type":"string"}},"required":["mode"]}},
-        {"name":"kg_scan","description":"Scan a codebase with tree-sitter and build knowledge graph","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},
-        {"name":"kg_triple_add","description":"Add a SPO triple to the knowledge graph","inputSchema":{"type":"object","properties":{"subject":{"type":"string"},"predicate":{"type":"string"},"object":{"type":"string"},"confidence":{"type":"number"},"source_memory_id":{"type":"string"},"project":{"type":"string"}},"required":["subject","predicate","object"]}}
+        {"name":"kg_scan","description":"Scan a codebase with ast-grep and build knowledge graph","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}
     ]})
 }
 
