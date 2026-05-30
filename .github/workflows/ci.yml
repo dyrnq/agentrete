@@ -28,6 +28,8 @@ jobs:
           key: lint-cargo-${{ hashFiles('Cargo.lock') }}
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Download sqlite-vec extensions
+        run: python3 scripts/download-sqlite-vec.py -d ext
       - name: Clippy
         run: cargo clippy --all-targets
 
