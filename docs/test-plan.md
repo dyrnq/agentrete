@@ -82,7 +82,51 @@ Plus ~12 KG node/edge/symbol tests and remote Ollama tests.
 ## Phase 3: Startup & Health
 
 ```bash
-cargo run --bin agentrete -- mcp -p 9092 &
+# Build binary first
+cargo build
+
+# Create config (adjust model2vec_path for your environment)
+cat > /tmp/test-m2v.toml << 'EOF'
+port = 9092
+db_dir = "/tmp/test-db"
+
+[embedding]
+backend = "model2vec"
+
+[embedding.model2vec]
+model = "BAAI/bge-small-zh-v1.5"
+dims = 256
+model2vec_path = "~/.cache/model2vec/bge-small-256d"
+
+[knowledge_graph]
+enabled = true
+EOF
+
+# Install and start as systemd daemon (recommended — stable, auto-restart)
+agentrete daemon install --port 9092 --binary "$(pwd)/target/debug/agentrete"
+
+# Override service to use the test config
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/agentrete.service << 'SVC_EOF'
+[Unit]
+Description=Agentrete Memory Server (MCP)
+After=network.target
+
+[Service]
+ExecStart=PATH_TO_BINARY -c /tmp/test-m2v.toml mcp --port 9092
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target
+SVC_EOF
+
+# Replace PATH_TO_BINARY with actual binary path
+sed -i "s|PATH_TO_BINARY|$(pwd)/target/debug/agentrete|" ~/.config/systemd/user/agentrete.service
+
+systemctl --user daemon-reload
+systemctl --user restart agentrete.service
 sleep 3
 curl -s http://127.0.0.1:9092/
 ```

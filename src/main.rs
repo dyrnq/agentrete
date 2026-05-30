@@ -384,10 +384,65 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
         Commands::Seed => {
             cli::seed::cmd_seed(&store).await?;
         }
+        Commands::Mcp { port } => {
+            let is_http = port.is_some();
+            let store_for_shutdown = store.clone();
+            let embed_handle = if is_http && cfg.embedding.backend != crate::config::EmbeddingBackend::None {
+                let embedder = crate::embed::embeddings::Embedder::from_config(&cfg.embedding)?;
+                let store2 = store.clone();
+                let (model, dims) = match cfg.embedding.backend {
+                    crate::config::EmbeddingBackend::Remote => (
+                        cfg.embedding.remote.model.clone().unwrap_or_else(|| "unknown".into()),
+                        cfg.embedding.remote.dims.unwrap_or(768) as usize,
+                    ),
+                    crate::config::EmbeddingBackend::Model2Vec => (
+                        format!("model2vec:{}:{}d", cfg.embedding.model2vec.model, cfg.embedding.model2vec.dims),
+                        cfg.embedding.model2vec.dims as usize,
+                    ),
+                    crate::config::EmbeddingBackend::None => (String::new(), 0),
+                };
+                Some(tokio::spawn(async move {
+                    log::info!("embed-worker: started (identifier={model}, dims={dims})");
+                    loop {
+                        match store2.embed_pending(&embedder, &model, dims, cfg.search.embed_batch).await {
+                            Ok(0) => {
+                                tokio::time::sleep(tokio::time::Duration::from_secs(cfg.search.embed_poll_secs)).await;
+                            }
+                            Ok(n) => {
+                                log::info!("embed-worker: flushed {n} vectors");
+                            }
+                            Err(e) => {
+                                log::info!("embed-worker: error flushing: {e}");
+                                tokio::time::sleep(tokio::time::Duration::from_secs(cfg.search.embed_retry_secs)).await;
+                            }
+                        }
+                    }
+                }))
+            } else {
+                None
+            };
+
+            let result = match port {
+                Some(_) => {
+                    crate::mcp::run_http(store, &cfg).await
+                }
+                None => {
+                    log::info!("agentrete: stdio mode (embed worker disabled, use HTTP for embeddings)");
+                    crate::mcp::run_stdio(store).await
+                }
+            };
+
+            if let Some(h) = embed_handle {
+                h.abort();
+            }
+
+            result?;
+            store_for_shutdown.shutdown().await;
+            return Ok(());
+        }
         Commands::Daemon { .. }
         | Commands::Setup
-        | Commands::InstallModel { .. }
-        | Commands::Mcp { .. } => {
+        | Commands::InstallModel { .. } => {
             unreachable!("handled before store open")
         }
     }
