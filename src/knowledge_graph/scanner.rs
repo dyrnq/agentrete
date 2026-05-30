@@ -47,8 +47,18 @@ const LANGUAGES: &[(&str, &[&str], &[&str])] = &[
     ("bash", &["function_definition"], &[]),
 ];
 
+/// Scan specific files using ast-grep CLI. Only processes the given files.
+pub fn scan_files(files: &[std::path::PathBuf]) -> Result<(Vec<Symbol>, Vec<Relation>)> {
+    let root = files.first().map(|f| f.parent().unwrap_or(Path::new("."))).unwrap_or(Path::new("."));
+    scan_directory_inner(root, Some(files))
+}
+
 /// Scan a directory using ast-grep CLI.
 pub fn scan_directory(root: &Path) -> Result<(Vec<Symbol>, Vec<Relation>)> {
+    scan_directory_inner(root, None)
+}
+
+fn scan_directory_inner(root: &Path, filtered_files: Option<&[std::path::PathBuf]>) -> Result<(Vec<Symbol>, Vec<Relation>)> {
     // Check sg is available
     let sg_check = Command::new("sg").arg("--version").output();
     if sg_check.is_err() {

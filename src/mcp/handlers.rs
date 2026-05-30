@@ -222,6 +222,21 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                         jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":"Scan started in background. Use kg_scan_status to check progress."}]}))
                     }
                 }
+                "kg_watch" => {
+                    let action = a["action"].as_str().unwrap_or("");
+                    match action {
+                        "start" => {
+                            let path = a["path"].as_str().unwrap_or(".");
+                            store.start_watch(std::path::Path::new(path));
+                            jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":format!("File watcher started on {}", path)}]}))
+                        }
+                        "stop" => {
+                            store.stop_watch();
+                            jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":"File watcher stopped"}]}))
+                        }
+                        _ => jsonrpc_err(&id, -32002, "kg_watch: action must be 'start' or 'stop'"),
+                    }
+                }
                 "kg_scan_status" => {
                     let running = store.scan_running.load(std::sync::atomic::Ordering::Acquire);
                     let text = if running {
