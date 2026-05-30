@@ -31,6 +31,23 @@ pub struct Store {
 /// Reciprocal Rank Fusion: merge vec0 KNN and FTS5 BM25 ranked lists.
 /// RRF score = sum(1 / (K + rank)) across lists, with K=60.
 /// Returns top-k results sorted by RRF score descending.
+/// Multiply score by e^(-days/half_life). Default half-life: 90 days.
+const DEFAULT_HALF_LIFE_DAYS: f64 = 90.0;
+
+fn temporal_decay(score: f64, created_at: &str) -> f64 {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at) {
+        let fixed: chrono::DateTime<Utc> = dt.into();
+        let age_days = (Utc::now() - fixed).num_hours() as f64 / 24.0;
+        if age_days > 0.0 {
+            score * (-age_days / DEFAULT_HALF_LIFE_DAYS).exp()
+        } else {
+            score
+        }
+    } else {
+        score
+    }
+}
+
 fn rrf_merge(
     vec_results: Vec<SearchResult>,
     fts_results: Vec<SearchResult>,
@@ -67,7 +84,7 @@ fn rrf_merge(
                 project: r.project.clone(),
                 source_file: r.source_file.clone(),
                 importance: r.importance,
-                score,
+                score: temporal_decay(score, &r.created_at),
                 created_at: r.created_at.clone(),
                 embedding: r.embedding.clone(),
             })
@@ -284,7 +301,7 @@ impl Store {
         };
 
         // Run both search paths concurrently
-        let (vec_results, fts_results) = if let Some(ref qv) = qv {
+        let (mut vec_results, fts_results) = if let Some(ref qv) = qv {
             let vec_fut = self.search_vec(qv, limit, memory_type);
             let fts_fut = self.search_fts(query, limit.min(100), memory_type);
             let (vr, fr) = tokio::join!(vec_fut, fts_fut);
@@ -298,6 +315,10 @@ impl Store {
 
         if vec_results.is_empty() {
             if !fts_results.is_empty() {
+                let mut fts_results = fts_results;
+                for r in &mut fts_results {
+                    r.score = temporal_decay(r.score, &r.created_at);
+                }
                 log::info!("rrf: FTS5-only ({} results)", fts_results.len());
                 return Ok(fts_results);
             }
@@ -313,6 +334,11 @@ impl Store {
                 }
             }
             return Ok(vec![]);
+        }
+
+        // Apply temporal decay to vec_results before merge
+        for r in &mut vec_results {
+            r.score = temporal_decay(r.score, &r.created_at);
         }
 
         let merged = rrf_merge(vec_results, fts_results, k);
