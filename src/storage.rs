@@ -203,7 +203,7 @@ impl Store {
             .as_ref()
             .map(|t| serde_json::to_string(t).unwrap_or_default());
         sqlx::query("INSERT INTO memories (id,type,content,tags,files,project,source_file,importance,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)")
-            .bind(&id).bind(&input.memory_type).bind(&input.content).bind(&tags).bind(&files).bind(&input.project).bind(&input.source_file).bind(0.5).bind(&now)
+            .bind(&id).bind(&input.memory_type).bind(&input.content).bind(&tags).bind(&files).bind(&input.project).bind(&input.source_file).bind(3).bind(&now)
             .execute(&self.pool).await?;
         // embedding=NULL — embed-worker picks it up later
         Ok(id)
@@ -514,7 +514,7 @@ impl Store {
             .fetch_one(&self.pool)
             .await?;
         let we: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL WHERE embedding IS NOT NULL",
+            "SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL AND embedding IS NOT NULL",
         )
         .fetch_one(&self.pool)
         .await?;
