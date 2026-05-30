@@ -8,7 +8,7 @@ use super::v2025_11;
 pub(crate) fn tools_list() -> Value {
     serde_json::json!({"tools":[
         {"name":"memory_search","description":"Search","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"number"}},"required":["query"]}},
-        {"name":"memory_save","description":"Save","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"type":{"type":"string"},"tags":{"type":"string"},"source_file":{"type":"string"}},"required":["content"]}},
+        {"name":"memory_save","description":"Save with optional dry_run preview","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"type":{"type":"string"},"tags":{"type":"string"},"source_file":{"type":"string"},"dry_run":{"type":"boolean"}},"required":["content"]}},
         {"name":"memory_list","description":"List memories, optionally filtered by type","inputSchema":{"type":"object","properties":{"limit":{"type":"number"},"type":{"type":"string"}},"required":[]}},
         {"name":"memory_forget","description":"Delete","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
         {"name":"memory_stats","description":"Stats","inputSchema":{"type":"object","properties":{},"required":[]}},
@@ -59,26 +59,35 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
             match n {
                 "memory_save" => {
                     let c = a["content"].as_str().unwrap_or("");
-                    let mt = a["type"].as_str().map(|s| s.to_string());
-                    let tags = a["tags"]
-                        .as_str()
-                        .map(|s| s.split(',').map(|t| t.trim().to_string()).collect());
-                    match store
-                        .save(crate::types::NewMemory {
-                            content: c.to_string(),
-                            memory_type: mt,
-                            tags,
-                            files: None,
-                            project: None,
-                            source_file: a["source_file"].as_str().map(|s| s.to_string()),
-                        })
-                        .await
-                    {
-                        Ok(id) => jsonrpc_ok(
-                            &serde_json::Value::String(id.clone()),
-                            serde_json::json!({"content":[{"type":"text","text":format!("Saved: {}",id)}]}),
-                        ),
-                        Err(e) => jsonrpc_err(&id, -32000, &format!("Save failed: {}", e)),
+                    let dry_run = a["dry_run"].as_bool().unwrap_or(false);
+                    if dry_run {
+                        let preview_id = format!("mem_{}", uuid::Uuid::new_v4());
+                        jsonrpc_ok(
+                            &serde_json::Value::String(preview_id.clone()),
+                            serde_json::json!({"content":[{"type":"text","text":format!("Preview: {} (not saved)", preview_id)}]}),
+                        )
+                    } else {
+                        let mt = a["type"].as_str().map(|s| s.to_string());
+                        let tags = a["tags"]
+                            .as_str()
+                            .map(|s| s.split(',').map(|t| t.trim().to_string()).collect());
+                        match store
+                            .save(crate::types::NewMemory {
+                                content: c.to_string(),
+                                memory_type: mt,
+                                tags,
+                                files: None,
+                                project: None,
+                                source_file: a["source_file"].as_str().map(|s| s.to_string()),
+                            })
+                            .await
+                        {
+                            Ok(id) => jsonrpc_ok(
+                                &serde_json::Value::String(id.clone()),
+                                serde_json::json!({"content":[{"type":"text","text":format!("Saved: {}",id)}]}),
+                            ),
+                            Err(e) => jsonrpc_err(&id, -32000, &format!("Save failed: {}", e)),
+                        }
                     }
                 }
                 "memory_search" => {

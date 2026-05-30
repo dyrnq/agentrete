@@ -153,7 +153,7 @@ impl Store {
 
     async fn initialize(&self) -> Result<()> {
         sqlx::query("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY, migrated_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
-        sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, source_file TEXT, importance REAL DEFAULT 0.5, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT)").execute(&self.pool).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, source_file TEXT, importance INTEGER DEFAULT 3, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT)").execute(&self.pool).await?;
         let _ = sqlx::query("ALTER TABLE memories ADD COLUMN source_file TEXT")
             .execute(&self.pool)
             .await;
@@ -218,7 +218,7 @@ impl Store {
 
         #[allow(clippy::type_complexity)]
         // KNN via vec0 virtual table
-        let rows: Vec<(String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<f64>, Option<String>, f64)> =
+        let rows: Vec<(String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<i32>, Option<String>, f64)> =
             sqlx::query_as(
                 "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid                  WHERE v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
             )
@@ -251,7 +251,7 @@ impl Store {
                         files: parse_json(&files),
                         project,
                         source_file,
-                        importance: importance.unwrap_or(0.5),
+                        importance: importance.unwrap_or(3),
                         score: (1.0_f64 - distance.powi(2) / 2.0).max(0.0),
                         created_at: created_at.unwrap_or_default(),
                         embedding: None,
@@ -344,7 +344,7 @@ impl Store {
                 files: parse_json(&r.files),
                 project: r.project,
                 source_file: r.source_file.clone(),
-                importance: r.importance.unwrap_or(0.5),
+                importance: r.importance.unwrap_or(3),
                 score: 0.5,
                 created_at: r.created_at.unwrap_or_default(),
                 embedding: r.embedding,
@@ -389,7 +389,7 @@ impl Store {
                         files: parse_json(&r.files),
                         project: r.project,
                         source_file: r.source_file.clone(),
-                        importance: r.importance.unwrap_or(0.5),
+                        importance: r.importance.unwrap_or(3),
                         score: cosine as f64,
                         created_at: r.created_at.unwrap_or_default(),
                         embedding: Some(emb.clone()),
@@ -406,7 +406,7 @@ impl Store {
                 files: parse_json(&r.files),
                 project: r.project,
                 source_file: r.source_file.clone(),
-                importance: r.importance.unwrap_or(0.5),
+                importance: r.importance.unwrap_or(3),
                 score: 0.5,
                 created_at: r.created_at.unwrap_or_default(),
                 embedding: r.embedding.clone(),
@@ -447,7 +447,7 @@ impl Store {
                 files: parse_json(&r.files),
                 project: r.project,
                 source_file: r.source_file.clone(),
-                importance: r.importance.unwrap_or(0.5),
+                importance: r.importance.unwrap_or(3),
                 created_at: r.created_at.unwrap_or_default(),
                 updated_at: r.updated_at.unwrap_or_default(),
                 session_id: None,
@@ -731,7 +731,7 @@ struct SearchRow {
     files: Option<String>,
     project: Option<String>,
     source_file: Option<String>,
-    importance: Option<f64>,
+    importance: Option<i32>,
     created_at: Option<String>,
     embedding: Option<Vec<u8>>,
 }
@@ -745,7 +745,7 @@ struct MemoryRow {
     files: Option<String>,
     project: Option<String>,
     source_file: Option<String>,
-    importance: Option<f64>,
+    importance: Option<i32>,
     created_at: Option<String>,
     updated_at: Option<String>,
 }
