@@ -3,8 +3,9 @@ name = "agentrete"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Local-first persistent memory for AI coding agents - DuckDB + BM25 + MCP"
+description = "Local-first persistent memory for AI coding agents - sqlite-vec + FTS5 + MCP"
 rust-version = "1.76"
+repository = "https://github.com/dyrnq/agentrete"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
