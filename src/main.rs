@@ -486,17 +486,26 @@ Status: ✅ agentrete is healthy"
                         log::info!("embed-worker: started (identifier={model}, dims={dims})");
 
                         loop {
-                            match store2.embed_pending(&embedder, &model, dims, 500).await {
+                            match store2
+                                .embed_pending(&embedder, &model, dims, cfg.search.embed_batch)
+                                .await
+                            {
                                 Ok(0) => {
                                     // No pending — sleep 5s
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(
+                                        cfg.search.embed_poll_secs,
+                                    ))
+                                    .await;
                                 }
                                 Ok(n) => {
                                     log::info!("embed-worker: flushed {n} vectors");
                                 }
                                 Err(e) => {
                                     log::info!("embed-worker: error flushing: {e}");
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(
+                                        cfg.search.embed_retry_secs,
+                                    ))
+                                    .await;
                                 }
                             }
                         }

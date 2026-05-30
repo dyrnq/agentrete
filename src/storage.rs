@@ -19,6 +19,10 @@ const VEC_EXT_BYTES: &[u8] = include_bytes!("../ext/vec0-linux-x86_64.so");
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 const VEC_EXT_BYTES: &[u8] = &[];
 
+// ─── Tunable constants (overridable via config) ──────────────────────────────
+const MAX_LIMIT: u8 = 100;
+const RECALL_MULTIPLIER: u8 = 3;
+
 #[derive(Clone)]
 pub struct Store {
     pool: SqlitePool,
@@ -28,6 +32,8 @@ pub struct Store {
     vec_dims: usize,
     rrf_k: f64,
     half_life_days: f64,
+    _default_limit: u8,
+    _list_limit: u8,
 }
 
 /// Reciprocal Rank Fusion: merge vec0 KNN and FTS5 BM25 ranked lists.
@@ -147,6 +153,8 @@ impl Store {
             vec_dims: dims,
             rrf_k: cfg.search.rrf_k,
             half_life_days: cfg.search.half_life_days,
+            _default_limit: cfg.search.default_limit,
+            _list_limit: cfg.search.list_limit,
         };
         if vec_enabled {
             store.init_vec().await?;
@@ -274,7 +282,7 @@ impl Store {
         limit: u8,
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
-        let k = limit.min(100) as usize;
+        let k = limit.min(MAX_LIMIT) as usize;
 
         // Get query embedding upfront (needed for vec0, may be used for fallback)
         let qv = if self.vec_enabled {
@@ -290,13 +298,15 @@ impl Store {
         // Run both search paths concurrently
         let (mut vec_results, fts_results) = if let Some(ref qv) = qv {
             let vec_fut = self.search_vec(qv, limit, memory_type);
-            let fts_fut = self.search_fts(query, limit.min(100), memory_type);
+            let fts_fut = self.search_fts(query, limit.min(MAX_LIMIT), memory_type);
             let (vr, fr) = tokio::join!(vec_fut, fts_fut);
             let vec_r = vr.unwrap_or_default();
             let fts_r = fr?;
             (vec_r, fts_r)
         } else {
-            let fts_r = self.search_fts(query, limit.min(100), memory_type).await?;
+            let fts_r = self
+                .search_fts(query, limit.min(MAX_LIMIT), memory_type)
+                .await?;
             (vec![], fts_r)
         };
 
@@ -340,7 +350,7 @@ impl Store {
         limit: u8,
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
-        let lim = limit.min(100) as i64;
+        let lim = limit.min(MAX_LIMIT) as i64;
         let rows: Vec<SearchRow> = if let Some(t) = memory_type {
             sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?3")
                 .bind(query).bind(t).bind(lim).fetch_all(&self.pool).await?
@@ -378,7 +388,7 @@ impl Store {
         let query_vec = embedder.embed_one(query).await?;
 
         // Step 2: FTS5 recall (wider window for reranking)
-        let recall_limit = (limit as i64 * 3).min(100);
+        let recall_limit = (limit as i64 * RECALL_MULTIPLIER as i64).min(MAX_LIMIT as i64);
         let rows: Vec<SearchRow> = if let Some(t) = memory_type {
             sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?3")
                 .bind(query).bind(t).bind(recall_limit).fetch_all(&self.pool).await?
@@ -446,10 +456,10 @@ impl Store {
     pub async fn list(&self, limit: u8, memory_type: Option<&str>) -> Result<Vec<Memory>> {
         let rows: Vec<MemoryRow> = if let Some(t) = memory_type {
             sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories WHERE type=?1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?2")
-                .bind(t).bind(limit.min(100) as i64).fetch_all(&self.pool).await?
+                .bind(t).bind(limit.min(MAX_LIMIT) as i64).fetch_all(&self.pool).await?
         } else {
             sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?1")
-                .bind(limit.min(100) as i64).fetch_all(&self.pool).await?
+                .bind(limit.min(MAX_LIMIT) as i64).fetch_all(&self.pool).await?
         };
         Ok(rows
             .into_iter()

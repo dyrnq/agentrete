@@ -98,6 +98,10 @@ pub struct SearchConfig {
     /// Default search result limit.
     #[serde(default = "default_search_limit")]
     pub default_limit: u8,
+    pub list_limit: u8,
+    pub embed_batch: usize,
+    pub embed_poll_secs: u64,
+    pub embed_retry_secs: u64,
 }
 
 fn default_rrf_k() -> f64 {
@@ -196,6 +200,10 @@ impl Default for SearchConfig {
             rrf_k: default_rrf_k(),
             half_life_days: default_half_life(),
             default_limit: default_search_limit(),
+            list_limit: 20,
+            embed_batch: 500,
+            embed_poll_secs: 5,
+            embed_retry_secs: 10,
         }
     }
 }

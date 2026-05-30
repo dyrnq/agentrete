@@ -114,7 +114,7 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                 }
                 "memory_search" => {
                     let q = a["query"].as_str().unwrap_or("");
-                    let l = a["limit"].as_u64().unwrap_or(5) as u8;
+                    let l = a["limit"].as_u64().unwrap_or(10) as u8;
                     match store.search(q, l, a["type"].as_str()).await {
                         Ok(r) => {
                             let items: Vec<Value> = r
@@ -136,7 +136,7 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                     }
                 }
                 "memory_list" => match store
-                    .list(a["limit"].as_u64().unwrap_or(10) as u8, a["type"].as_str())
+                    .list(a["limit"].as_u64().unwrap_or(20) as u8, a["type"].as_str())
                     .await
                 {
                     Ok(e) => {
