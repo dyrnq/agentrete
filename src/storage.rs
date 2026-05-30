@@ -204,7 +204,7 @@ impl Store {
         let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_predicate ON kg_triples(predicate)").execute(&self.pool).await;
         let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_memory ON kg_triples(source_memory_id)").execute(&self.pool).await;
         let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_project ON kg_triples(project)").execute(&self.pool).await;
-        let _ = sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_triples_spo ON kg_triples(subject, predicate, object)").execute(&self.pool).await;
+        let _ = sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_triples_spo ON kg_triples(subject, predicate, object, project)").execute(&self.pool).await;
         Ok(())
     }
 
@@ -231,22 +231,23 @@ impl Store {
     pub async fn scan_codebase(&self, root: &std::path::Path) -> Result<(usize, usize)> {
         let (symbols, relations) = crate::knowledge_graph::scanner::scan_directory(root)?;
         let now = chrono::Utc::now().to_rfc3339();
+        let project = detect_project_for_scan(root);
 
         for sym in &symbols {
             let id = format!("node_{}", uuid::Uuid::new_v4());
             let _ = sqlx::query(
-                "INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'label',?3,1.0,NULL,?4)"
+                "INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'label',?3,1.0,?4,?5)"
             )
-            .bind(&id).bind(&sym.name).bind(&sym.kind).bind(&now)
+            .bind(&id).bind(&sym.name).bind(&sym.kind).bind(&project).bind(&now)
             .execute(&self.pool).await;
         }
 
         for rel in &relations {
             let id = format!("rel_{}", uuid::Uuid::new_v4());
             let _ = sqlx::query(
-                "INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,?3,?4,1.0,NULL,?5)"
+                "INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6)"
             )
-            .bind(&id).bind(&rel.source).bind(&rel.relation).bind(&rel.target).bind(&now)
+            .bind(&id).bind(&rel.source).bind(&rel.relation).bind(&rel.target).bind(&project).bind(&now)
             .execute(&self.pool).await;
         }
 
@@ -964,6 +965,28 @@ fn parse_json(val: &Option<String>) -> Option<Vec<String>> {
         Some(s) if !s.is_empty() => serde_json::from_str(s).ok(),
         _ => None,
     }
+}
+
+/// Detect project name from path or git for code scanning.
+fn detect_project_for_scan(root: &std::path::Path) -> Option<String> {
+    // Try git first
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(root)
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string());
+            if name.is_some() {
+                return name;
+            }
+        }
+    }
+    // Fallback: use directory name
+    root.file_name().map(|n| n.to_string_lossy().to_string())
 }
 
 // ─── Re-embed integration tests ──────────────────────────────────────────────
