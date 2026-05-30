@@ -34,7 +34,7 @@ enabled = true
 ## Phase 1: Build & Lint
 
 ```bash
-cd /data/work/agentrete
+cd /path/to/agentrete
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo build
@@ -200,7 +200,7 @@ which sg || cargo install ast-grep
 
 ```bash
 curl -s http://127.0.0.1:9092/ \
-  -d '{"method":"tasks/send","params":{"name":"kg_scan","arguments":{"path":"/data/work/agentrete","watch":false}},"id":10}' | jq .
+  -d '{"method":"tasks/send","params":{"name":"kg_scan","arguments":{"path":"/path/to/agentrete","watch":false}},"id":10}' | jq .
 ```
 Expected: Returns task_0001 with status running.
 
@@ -247,7 +247,7 @@ Expected: Path or "No path found".
 
 ```bash
 curl -s http://127.0.0.1:9092/ \
-  -d '{"method":"tasks/send","params":{"name":"kg_scan","arguments":{"path":"/data/work/agentrete","watch":true}},"id":16}' | jq '.result.content[0].text'
+  -d '{"method":"tasks/send","params":{"name":"kg_scan","arguments":{"path":"/path/to/agentrete","watch":true}},"id":16}' | jq '.result.content[0].text'
 ```
 Expected: Scan starts, file watcher activated.
 

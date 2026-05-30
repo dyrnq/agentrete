@@ -99,7 +99,7 @@ _phase-5:
 _phase-6:
 	@echo "--- Phase 6: Knowledge Graph ---"
 	@curl -s http://127.0.0.1:$(PORT)/ \
-	  -d '{"method":"tasks/send","params":{"name":"kg_scan","arguments":{"path":"/data/work/agentrete","watch":false}},"id":10}' \
+	  -d '{"method":"tasks/send","params":{"name":"kg_scan","arguments":{"path":"$(CURDIR)","watch":false}},"id":10}' \
 	  | jq '.result.content[0].text' | grep -q 'running' \
 	  || (echo "FAIL: scan"; exit 1)
 	@sleep 10

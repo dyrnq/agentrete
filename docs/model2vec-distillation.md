@@ -46,7 +46,7 @@ Accuracy:
 
 ```bash
 # Distill all 4 dimensions (downloads 2.2GB once, PCA is fast)
-cd /data/work/agentrete && uv run .dev/distill-bge-m3.py
+cd /path/to/agentrete && uv run .dev/distill-bge-m3.py
 
 # Or pick specific dims
 uv run .dev/distill-bge-m3.py 512
