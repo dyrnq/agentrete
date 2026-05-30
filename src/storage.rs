@@ -86,10 +86,10 @@ fn rrf_merge(
 impl Store {
     pub async fn open(cfg: &crate::config::Config, embedder: Option<Embedder>) -> Result<Self> {
         let dims = match cfg.embedding.backend {
+            crate::config::EmbeddingBackend::None => { log::info!("backend=none, dims=0, vec disabled"); 0 },
             crate::config::EmbeddingBackend::Remote => {
                 cfg.embedding.remote.dims.unwrap_or(768) as usize
             }
-            crate::config::EmbeddingBackend::None => 0,
             _ => cfg.embedding.model2vec.dims as usize,
         };
         let path = cfg.db_dir().join("memory.db");
@@ -145,6 +145,7 @@ impl Store {
 
         // vec_enabled already set during extension loading above
 
+        let vec_enabled = vec_enabled && dims > 0;
         let store = Self {
             pool,
             path,
