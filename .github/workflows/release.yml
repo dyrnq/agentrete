@@ -207,7 +207,21 @@ jobs:
           console.log('Run "agentrete setup" to configure AI tools.');
           INSTALLJS
 
+      - name: Check npm version
+        id: npm-check
+        run: |
+          VERSION=$(node -e "console.log(require('./npm/package.json').version)")
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://registry.npmjs.org/agentrete/$VERSION" 2>/dev/null || echo "000")
+          if [ "$STATUS" = "200" ]; then
+            echo "Version $VERSION already published to npm"
+            echo "published=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version $VERSION not yet published"
+            echo "published=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Publish to npm
+        if: steps.npm-check.outputs.published != 'true'
         run: |
           cd npm
           npm publish --access public

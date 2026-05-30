@@ -1,0 +1,91 @@
+//! SQLite storage via sqlx (async, Send+Sync, connection pool).
+
+use anyhow::Result;
+use chrono::Utc;
+
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use std::path::PathBuf;
+use std::sync::Arc;
+use uuid::Uuid;
+
+use crate::embed::embeddings::Embedder;
+use crate::knowledge_graph::KnowledgeGraph;
+use crate::types::{DbStats, Memory, NewMemory, SearchResult};
+
+// Embedded sqlite-vec extension for the current platform.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+// Embedded sqlite-vec extension for the current platform.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const VEC_EXT_BYTES: &[u8] = include_bytes!("../ext/vec0-linux-x86_64.so");
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+const VEC_EXT_BYTES: &[u8] = &[];
+
+// ─── Tunable constants (overridable via config) ──────────────────────────────
+const MAX_LIMIT: u8 = 100;
+const RECALL_MULTIPLIER: u8 = 3;
+
+#[derive(Clone)]
+pub struct Store {
+    pub(crate) pool: SqlitePool,
+    path: PathBuf,
+    embedder: Option<Arc<Embedder>>,
+    pub(crate) graph: KnowledgeGraph,
+    pub(crate) scan_running: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) watch_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub(crate) scan_result: Arc<std::sync::Mutex<Option<String>>>,
+    pub(crate) tasks: Arc<crate::mcp::tasks::TaskManager>,
+    vec_enabled: bool,
+    vec_dims: usize,
+    rrf_k: f64,
+    half_life_days: f64,
+    _default_limit: u8,
+    _list_limit: u8,
+}
+
+/// Reciprocal Rank Fusion: merge vec0 KNN and FTS5 BM25 ranked lists.
+/// RRF score = sum(1 / (K + rank)) across lists, with K=60.
+/// Returns top-k results sorted by RRF score descending.
+fn rrf_merge(
+    vec_results: Vec<SearchResult>,
+    fts_results: Vec<SearchResult>,
+    k: usize,
+    rrf_k: f64,
+) -> Vec<SearchResult> {
+    use std::collections::HashMap;
+
+    let mut scores: HashMap<&str, f64> = HashMap::new();
+    let mut data: HashMap<&str, &SearchResult> = HashMap::new();
+
+    for (rank, r) in vec_results.iter().enumerate() {
+        *scores.entry(r.id.as_str()).or_default() += 1.0 / (rrf_k + rank as f64 + 1.0);
+        data.entry(r.id.as_str()).or_insert(r);
+    }
+    for (rank, r) in fts_results.iter().enumerate() {
+        *scores.entry(r.id.as_str()).or_default() += 1.0 / (rrf_k + rank as f64 + 1.0);
+        data.entry(r.id.as_str()).or_insert(r);
+    }
+
+    let mut merged: Vec<(&str, f64)> = scores.into_iter().collect();
+    merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    merged
+        .into_iter()
+        .take(k)
+        .filter_map(|(id, score)| {
+            data.get(id).map(|r| SearchResult {
+                id: r.id.clone(),
+                memory_type: r.memory_type.clone(),
+                content: r.content.clone(),
+                tags: r.tags.clone(),
+                files: r.files.clone(),
+                project: r.project.clone(),
+                source_file: r.source_file.clone(),
+                importance: r.importance,
+                score,
+                created_at: r.created_at.clone(),
+                embedding: r.embedding.clone(),
+            })
+        })
+        .collect()
+}
+
