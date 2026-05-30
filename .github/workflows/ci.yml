@@ -44,6 +44,8 @@ jobs:
             ~/.cargo/git
             target
           key: test-cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Download sqlite-vec extensions
+        run: python3 scripts/download-sqlite-vec.py -d ext
       - name: Build
         run: cargo build
       - name: Build release

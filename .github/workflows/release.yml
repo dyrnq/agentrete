@@ -25,6 +25,8 @@ jobs:
             ~/.cargo/git
             target
           key: test-release-cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Download sqlite-vec extensions
+        run: python3 scripts/download-sqlite-vec.py -d ext
       - name: Run tests
         run: cargo test
 
@@ -59,6 +61,8 @@ jobs:
             target
           key: ${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
 
+      - name: Download sqlite-vec extensions
+        run: python3 scripts/download-sqlite-vec.py -d ext
       - name: Build (release)
         run: cargo build --release --target ${{ matrix.target }}
 
