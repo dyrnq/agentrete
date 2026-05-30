@@ -30,6 +30,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Download sqlite-vec extensions
         run: python3 scripts/download-sqlite-vec.py -d ext
+      - name: Verify ext
+        run: test -f ext/vec0-linux-x86_64.so || (echo "ERROR: sqlite-vec extension missing" && exit 1)
       - name: Clippy
         run: cargo clippy --all-targets
 
@@ -49,6 +51,8 @@ jobs:
           key: test-cargo-${{ hashFiles('Cargo.lock') }}
       - name: Download sqlite-vec extensions
         run: python3 scripts/download-sqlite-vec.py -d ext
+      - name: Verify ext
+        run: test -f ext/vec0-linux-x86_64.so || (echo "ERROR: sqlite-vec extension missing" && exit 1)
       - name: Build
         run: cargo build
       - name: Build release
