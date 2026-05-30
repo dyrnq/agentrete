@@ -169,7 +169,7 @@ impl Store {
 
     async fn initialize(&self) -> Result<()> {
         sqlx::query("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY, migrated_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
-        sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, source_file TEXT, importance INTEGER DEFAULT 3, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT)").execute(&self.pool).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, source_file TEXT, importance INTEGER DEFAULT 3, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT, deleted_at TEXT)").execute(&self.pool).await?;
         let _ = sqlx::query("ALTER TABLE memories ADD COLUMN source_file TEXT")
             .execute(&self.pool)
             .await;
@@ -178,9 +178,6 @@ impl Store {
             .execute(&self.pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at)")
-            .execute(&self.pool)
-            .await?;
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_deleted_at ON memories(deleted_at) WHERE deleted_at IS NOT NULL")
             .execute(&self.pool)
             .await?;
         sqlx::query("CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content, content_rowid='rowid', tokenize='unicode61')").execute(&self.pool).await?;
@@ -253,25 +250,29 @@ impl Store {
         limit: u8,
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
-        let _ = memory_type;
         let mut query_vec = query_vec_orig.to_vec();
         normalize_l2(&mut query_vec);
         let query_vec = query_vec.as_slice();
-        let _dims = query_vec.len();
         let json_vec: String = serde_json::to_string(&query_vec)?;
         let lim = limit.min(50) as i64;
 
         #[allow(clippy::type_complexity)]
-        // KNN via vec0 virtual table
         let rows: Vec<(String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<i32>, Option<String>, f64)> =
-            sqlx::query_as(
-                "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid WHERE m.deleted_at IS NULL AND v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
-            )
-            .bind(&json_vec)
-            .bind(lim)
-            .bind(lim)
-            .fetch_all(&self.pool)
-            .await?;
+            if let Some(t) = memory_type {
+                sqlx::query_as(
+                    "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid WHERE m.deleted_at IS NULL AND m.type = ?4 AND v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
+                )
+                .bind(&json_vec).bind(lim).bind(lim).bind(t)
+                .fetch_all(&self.pool)
+                .await?
+            } else {
+                sqlx::query_as(
+                    "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid WHERE m.deleted_at IS NULL AND v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
+                )
+                .bind(&json_vec).bind(lim).bind(lim)
+                .fetch_all(&self.pool)
+                .await?
+            };
 
         Ok(rows
             .into_iter()
@@ -485,13 +486,13 @@ impl Store {
         Ok(results)
     }
 
-    pub async fn list(&self, limit: u8, memory_type: Option<&str>) -> Result<Vec<Memory>> {
+    pub async fn list(&self, limit: u8, memory_type: Option<&str>, offset: u32) -> Result<Vec<Memory>> {
         let rows: Vec<MemoryRow> = if let Some(t) = memory_type {
-            sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories WHERE type=?1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?2")
-                .bind(t).bind(limit.min(MAX_LIMIT) as i64).fetch_all(&self.pool).await?
+            sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories WHERE type=?1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?2 OFFSET ?3")
+                .bind(t).bind(limit.min(MAX_LIMIT) as i64).bind(offset).fetch_all(&self.pool).await?
         } else {
-            sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?1")
-                .bind(limit.min(MAX_LIMIT) as i64).fetch_all(&self.pool).await?
+            sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?1 OFFSET ?2")
+                .bind(limit.min(MAX_LIMIT) as i64).bind(offset).fetch_all(&self.pool).await?
         };
         Ok(rows
             .into_iter()
@@ -512,6 +513,21 @@ impl Store {
     }
 
     pub async fn forget(&self, id: &str) -> Result<()> {
+        // Also delete from vec0 if enabled (FTS TRIGGER handles FTS cleanup automatically)
+        if self.vec_enabled {
+            if let Ok(Some(rid)) = sqlx::query_scalar::<_, i64>(
+                "SELECT rowid FROM memories WHERE id = ?1",
+            )
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            {
+                sqlx::query("DELETE FROM vec_memories WHERE rowid = ?1")
+                    .bind(rid)
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
         // Hard delete. FTS TRIGGER removes from index automatically.
         sqlx::query("DELETE FROM memories WHERE id=?1")
             .bind(id)
@@ -792,6 +808,14 @@ impl Store {
 
         Ok(ids.len())
     }
+
+    /// Gracefully shut down the store: flush WAL, close pool.
+    pub async fn shutdown(self) {
+        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&self.pool)
+            .await;
+        self.pool.close().await;
+    }
 }
 
 // ─── Row types ──────────────────────────────────────────────────────────────
@@ -866,5 +890,82 @@ fn parse_json(val: &Option<String>) -> Option<Vec<String>> {
     match val {
         Some(s) if !s.is_empty() => serde_json::from_str(s).ok(),
         _ => None,
+    }
+}
+
+// ─── Re-embed integration tests ──────────────────────────────────────────────
+#[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
+mod tests {
+    use tempfile::tempdir;
+
+    fn fake_blob(dims: usize, val: f32) -> Vec<u8> {
+        let v: Vec<f32> = vec![val; dims];
+        v.iter().flat_map(|f| f32::to_le_bytes(*f)).collect()
+    }
+
+    #[tokio::test]
+    async fn test_reembed_flow() {
+        let tmp = tempdir().unwrap();
+        let db_path = tmp.path().join("memory.db");
+
+        // Raw SQLite pool (no vec0 extension) to test re-embed SQL logic
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true);
+        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+
+        sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, source_file TEXT, importance INTEGER DEFAULT 3, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT, deleted_at TEXT)")
+            .execute(&pool).await.unwrap();
+
+        async fn ins(pool: &sqlx::SqlitePool, content: &str, blob: &[u8], model: &str, dims: i64) -> String {
+            let id = format!("mem_{}", uuid::Uuid::new_v4());
+            let now = chrono::Utc::now().to_rfc3339();
+            sqlx::query("INSERT INTO memories (id,type,content,importance,created_at,updated_at) VALUES (?1,'fact',?2,3,?3,?3)")
+                .bind(&id).bind(content).bind(&now)
+                .execute(pool).await.unwrap();
+            if !blob.is_empty() {
+                sqlx::query("UPDATE memories SET embedding=?1, embedding_model=?2, embedding_dims=?3 WHERE id=?4")
+                    .bind(blob).bind(model).bind(dims).bind(&id)
+                    .execute(pool).await.unwrap();
+            }
+            id
+        }
+
+        // ─── init_vec dimension-check SQL ───
+        for _ in 0..3 {
+            ins(&pool, "64d", &fake_blob(64, 0.1), "m:64d", 64).await;
+        }
+        let sd: Option<i64> = sqlx::query_scalar(
+            "SELECT embedding_dims FROM memories WHERE embedding IS NOT NULL GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1"
+        ).fetch_optional(&pool).await.unwrap();
+        assert_eq!(sd, Some(64));
+        assert!(sd.is_some_and(|d| d as usize != 128), "64 vs 128 should trigger rebuild");
+        assert!(!sd.is_some_and(|d| d as usize != 64), "64 vs 64 should NOT trigger rebuild");
+
+        // NULL embeddings ignored by GROUP BY
+        let sd2: Option<i64> = sqlx::query_scalar(
+            "SELECT embedding_dims FROM memories WHERE embedding IS NOT NULL GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1"
+        ).fetch_optional(&pool).await.unwrap();
+        assert_eq!(sd2, Some(64), "NULL emb should not affect stored_dims");
+
+        // ─── embed_pending SQL ───
+        let id_null  = ins(&pool, "pending", &[], "", 0).await;
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        let id_fresh = ins(&pool, "fresh", &fake_blob(64,0.1), "curr:64d", 64).await;
+        let id_stale = ins(&pool, "stale", &fake_blob(64,0.1), "old:64d", 64).await;
+        let id_wd    = ins(&pool, "wd", &fake_blob(32,0.1), "old:32d", 32).await;
+
+        let pending: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, content FROM memories WHERE deleted_at IS NULL AND (embedding IS NULL OR embedding_model IS NOT ?2 OR embedding_dims IS NOT ?3) ORDER BY embedding IS NULL DESC, created_at ASC LIMIT ?1"
+        ).bind(100i64).bind("curr:64d").bind(64i64)
+         .fetch_all(&pool).await.unwrap();
+
+        let pids: Vec<&str> = pending.iter().map(|(id,_)| id.as_str()).collect();
+        assert!(pids.contains(&id_null.as_str()), "NULL embed must be pending");
+        assert!(!pids.contains(&id_fresh.as_str()), "fresh must NOT be pending");
+        assert!(pids.contains(&id_stale.as_str()), "stale model must be pending");
+        assert!(pids.contains(&id_wd.as_str()), "wrong dims must be pending");
+        assert_eq!(pids[0], id_null.as_str(), "NULL should sort first by created_at");
     }
 }

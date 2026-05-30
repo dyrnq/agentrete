@@ -356,7 +356,7 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
             }
         }
         Commands::List { limit } => {
-            let entries = store.list(limit, None).await?;
+            let entries = store.list(limit, None, 0).await?;
             if entries.is_empty() {
                 println!("No memories.");
             } else {
@@ -460,6 +460,7 @@ Status: ✅ agentrete is healthy"
         Commands::Mcp { port } => {
             // Spawn embed worker only in HTTP mode (stdio instances share DB)
             let is_http = port.is_some();
+            let store_for_shutdown = store.clone();
             let embed_handle =
                 if is_http && cfg.embedding.backend != crate::config::EmbeddingBackend::None {
                     let embedder = crate::embed::embeddings::Embedder::from_config(&cfg.embedding)?;
@@ -528,7 +529,9 @@ Status: ✅ agentrete is healthy"
             if let Some(h) = embed_handle {
                 h.abort();
             }
-            result?
+            // Flush WAL + close pool before runtime drops
+            result?;
+            store_for_shutdown.shutdown().await;
         }
     }
 

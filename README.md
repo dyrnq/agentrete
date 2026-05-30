@@ -4,7 +4,7 @@ Local-first persistent memory engine for AI coding agents.
 
 **Why**: AI agents lose context between sessions. Agentrete remembers your preferences, project decisions, and past pitfalls — automatically recalled in future conversations.
 
-**How**: Single Rust binary. Embedded DuckDB + on-device embedding model (m3e-base, 391MB). Exposes MCP tools over HTTP or stdio. Cross-platform hooks for Codex CLI, Claude Code, and more.
+**How**: Single Rust binary. Embedded SQLite + sqlite-vec KNN + Model2Vec (10MB CPU). Exposes MCP tools over HTTP or stdio. Cross-platform hooks for Codex CLI, Claude Code, and more.
 
 ## Quick Start
 
@@ -48,17 +48,18 @@ npx agentrete setup
 
 | Tool | Description |
 |------|-------------|
-| `memory_search` | Semantic search (BM25 + vector hybrid) |
-| `memory_save` | Save memory with duplicate detection |
-| `memory_list` | List recent memories |
+| `memory_search` | Semantic search (vec0 KNN + FTS5 BM25 → RRF fusion + temporal decay) |
+| `memory_save` | Save memory with auto-detect project from git, dry_run preview |
+| `memory_list` | List recent memories, optionally filtered by type |
 | `memory_forget` | Delete by ID |
-| `memory_stats` | Database statistics |
+| `memory_stats` | DB statistics (schema version, type counts, model info, vec0 status) |
+| `memory_compact` | Deduplicate (exact or semantic by cosine threshold) + reclaim disk |
 
 ## Features
 
 - **Embedded**: Single binary, no external DB or API required
-- **Semantic search**: 768-dim vector search via m3e-base + DuckDB
-- **Cross-platform**: Linux, macOS, Windows (native PowerShell hooks)
+- **Semantic search**: 256-512d vector search via Model2Vec + sqlite-vec KNN, hybrid RRF fusion with FTS5 BM25
+- **Cross-platform**: Linux, macOS, Windows — all with native hooks (bash/PowerShell)
 - **MCP protocol**: 2024-11-05, 2025-06-18, 2025-11-25 with version negotiation
 - **Hooks**: 9 Codex events + 2 Claude Code events, all embedded at compile time
 - **Model auto-download**: First `save`/`search` downloads embedding model lazily
@@ -78,21 +79,25 @@ Codex / Claude Code / Cursor / Zed / ...
   └──────────┴──────────┴──────────┘
         │
         ▼
-  DuckDB + BM25 FTS + m3e-base embedding
+  SQLite + FTS5 BM25 + sqlite-vec KNN + model2vec
+        │
+        ▼
+  Model2Vec / Ollama / OpenAI / Anthropic (4 backends)
 ```
 
 ## Memory Lifecycle
 
-1. **Save** — text → 768-dim vector → DuckDB
-2. **Search** — BM25 keywords + vector cosine similarity → ranked results
-3. **Forget** — delete by ID
+1. **Save** — text + metadata → SQLite (embedding=NULL, embed worker picks up async)
+2. **Embed** — background worker batches pending rows → Model2Vec/remote API → writes embedding + vec0 index
+3. **Search** — query → vec0 KNN + FTS5 BM25 concurrent → RRF fusion → temporal decay → ranked results
+4. **Forget** — hard delete (row + vec0 entry)
 
 ## Configuration
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
 | `AGENTRETE_URL` | `http://127.0.0.1:9092` | MCP server URL |
-| `AGENTRETE_MODEL` | `moka-ai/m3e-base` | Embedding model |
+| `AGENTRETE_MODEL` | `BAAI/bge-small-zh-v1.5` | Embedding model (model2vec) |
 | `AGENTRETE_NO_EMBED` | — | Disable embedding (BM25 only) |
 | `HF_ENDPOINT` | `https://hf-mirror.com` | HuggingFace mirror |
 
@@ -102,4 +107,4 @@ Codex / Claude Code / Cursor / Zed / ...
 - [Agent Hooks Reference](docs/agent-hooks.md)
 - [Memory Decision Guide](docs/memory-decision.md)
 - [Memory Lifecycle](docs/memory-lifecycle.md)
-- [DuckDB Concurrency](docs/duckdb-concurrency.md)
+- [Architecture Overview](docs/architecture.md)

@@ -308,7 +308,7 @@ dims = 1536
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.embedding.backend, EmbeddingBackend::Remote);
-        assert_eq!(cfg.embedding.model2vec.dims, 1536);
+        assert_eq!(cfg.embedding.remote.dims, Some(1536));
         assert_eq!(
             cfg.embedding.remote.url.as_deref(),
             Some("https://api.openai.com/v1")
@@ -317,7 +317,9 @@ dims = 1536
             cfg.embedding
                 .remote
                 .vendor
-                .unwrap_or_else(|| RemoteVendor::detect("")),
+                .unwrap_or_else(|| RemoteVendor::detect(
+                    cfg.embedding.remote.url.as_deref().unwrap_or("")
+                )),
             RemoteVendor::OpenAI
         );
     }
@@ -336,9 +338,8 @@ model = "granite-embedding:278m"
         assert_eq!(
             cfg.embedding
                 .remote
-                .vendor
-                .unwrap_or_else(|| RemoteVendor::detect("")),
-            RemoteVendor::Ollama
+                .vendor,
+            Some(RemoteVendor::Ollama)
         );
     }
 
@@ -356,7 +357,9 @@ model = "voyage-3"
             cfg.embedding
                 .remote
                 .vendor
-                .unwrap_or_else(|| RemoteVendor::detect("")),
+                .unwrap_or_else(|| RemoteVendor::detect(
+                    cfg.embedding.remote.url.as_deref().unwrap_or("")
+                )),
             RemoteVendor::Anthropic
         );
     }
@@ -376,9 +379,10 @@ backend = "none"
     fn test_parse_yaml_embed() {
         let yaml_str = r#"
 embedding:
-  backend: local
-  model_id: BAAI/bge-small-zh-v1.5
-  dims: 512
+  backend: model2vec
+  model2vec:
+    model: BAAI/bge-small-zh-v1.5
+    dims: 512
 "#;
         let cfg: Config = serde_yaml::from_str(yaml_str).unwrap();
         assert_eq!(cfg.embedding.model2vec.model, "BAAI/bge-small-zh-v1.5");

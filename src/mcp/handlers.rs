@@ -8,9 +8,9 @@ use super::v2025_11;
 
 pub(crate) fn tools_list() -> Value {
     serde_json::json!({"tools":[
-        {"name":"memory_search","description":"Search","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"number"}},"required":["query"]}},
+        {"name":"memory_search","description":"Semantic search with RRF fusion (vec0 KNN + FTS5 BM25)","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"number"},"type":{"type":"string"}},"required":["query"]}},
         {"name":"memory_save","description":"Save with optional dry_run preview, auto-detects project from git","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"type":{"type":"string"},"tags":{"type":"string"},"source_file":{"type":"string"},"project":{"type":"string"},"dry_run":{"type":"boolean"}},"required":["content"]}},
-        {"name":"memory_list","description":"List memories, optionally filtered by type","inputSchema":{"type":"object","properties":{"limit":{"type":"number"},"type":{"type":"string"}},"required":[]}},
+        {"name":"memory_list","description":"List memories, optionally filtered by type","inputSchema":{"type":"object","properties":{"limit":{"type":"number"},"type":{"type":"string"},"offset":{"type":"number"}},"required":[]}},
         {"name":"memory_forget","description":"Delete","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
         {"name":"memory_stats","description":"Stats","inputSchema":{"type":"object","properties":{},"required":[]}},
         {"name":"memory_compact","description":"Deduplicate memories (exact or semantic) and reclaim disk space","inputSchema":{"type":"object","properties":{"mode":{"type":"string"}},"required":[]}}
@@ -120,13 +120,21 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                             let items: Vec<Value> = r
                                 .into_iter()
                                 .map(|x| {
+                                    let meta = format!(
+                                        "tags:{} imp:{} at:{} src:{} proj:{}",
+                                        x.tags.as_ref().map(|t| t.join(",")).unwrap_or_default(),
+                                        x.importance,
+                                        x.created_at,
+                                        x.source_file.as_deref().unwrap_or("?"),
+                                        x.project.as_deref().unwrap_or("?")
+                                    );
                                     serde_json::json!({"type":"text","text":format!(
-                                        "[{}] {} (score={:.2}) id={}{}",
+                                        "[{}] {} (score={:.2}) id={}  {}",
                                         x.memory_type.as_deref().unwrap_or("-"),
                                         x.content,
                                         x.score,
                                         x.id,
-                                        if let Some(ref f) = x.source_file { format!(" src:{}", f) } else { String::new() }
+                                        meta
                                     )})
                                 })
                                 .collect();
@@ -136,18 +144,27 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                     }
                 }
                 "memory_list" => match store
-                    .list(a["limit"].as_u64().unwrap_or(20) as u8, a["type"].as_str())
+                    .list(a["limit"].as_u64().unwrap_or(20) as u8, a["type"].as_str(), a["offset"].as_u64().unwrap_or(0) as u32)
                     .await
                 {
                     Ok(e) => {
                         let items: Vec<Value> = e
                             .into_iter()
                             .map(|m| {
+                                let meta = format!(
+                                    "tags:{} imp:{} at:{} src:{} proj:{}",
+                                    m.tags.as_ref().map(|t| t.join(",")).unwrap_or_default(),
+                                    m.importance,
+                                    m.created_at,
+                                    m.source_file.as_deref().unwrap_or("?"),
+                                    m.project.as_deref().unwrap_or("?")
+                                );
                                 serde_json::json!({"type":"text","text":format!(
-                                    "[{}] {} id={}",
+                                    "[{}] {} id={}  {}",
                                     m.memory_type.as_deref().unwrap_or("-"),
                                     m.content,
-                                    m.id
+                                    m.id,
+                                    meta
                                 )})
                             })
                             .collect();
