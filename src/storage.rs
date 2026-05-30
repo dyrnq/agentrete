@@ -31,6 +31,8 @@ pub struct Store {
     embedder: Option<Arc<Embedder>>,
     pub(crate) graph: KnowledgeGraph,
     pub(crate) scan_running: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) watch_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub(crate) scan_result: Arc<std::sync::Mutex<Option<String>>>,
     vec_enabled: bool,
     vec_dims: usize,
     rrf_k: f64,
@@ -158,6 +160,8 @@ impl Store {
             embedder: embedder.map(Arc::new),
             graph: KnowledgeGraph::disabled(),
             scan_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            watch_handle: Arc::new(std::sync::Mutex::new(None)),
+            scan_result: Arc::new(std::sync::Mutex::new(None)),
             vec_enabled,
             vec_dims: dims,
             rrf_k: cfg.search.rrf_k,
@@ -262,8 +266,120 @@ impl Store {
             self.graph.add_triple_local(&rel.source, &rel.relation, &rel.target, 1.0, None);
         }
 
+        if let Ok(mut r) = self.scan_result.lock() {
+            *r = Some(format!("kg_scan: {} symbols, {} relations", symbols.len(), relations.len()));
+        }
+        if std::process::Command::new("git").arg("--version").output().is_ok() {
+            if let Some(ref git_root) = detect_project_git_root(root) {
+                if let Err(e) = self.scan_git_history(git_root, &project).await {
+                    log::warn!("kg_scan: git history scan failed: {e}");
+                }
+            }
+        }
         log::info!("kg_scan: {} symbols, {} relations from {:?}", symbols.len(), relations.len(), root);
         Ok((symbols.len(), relations.len()))
+    }
+
+    /// Start file watcher: auto-scan on code changes.
+    pub fn start_watch(&self, root: &std::path::Path) {
+        use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+        use std::sync::mpsc;
+        let root = root.to_path_buf();
+        let scan_running = self.scan_running.clone();
+        let store_clone = self.clone();
+        let (tx, rx) = mpsc::channel::<Result<notify::Event, notify::Error>>();
+        let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
+            Ok(w) => w,
+            Err(e) => { log::warn!("kg_watch: failed to create watcher: {e}"); return; }
+        };
+        if let Err(e) = watcher.watch(&root, RecursiveMode::Recursive) {
+            log::warn!("kg_watch: failed to watch {root:?}: {e}"); return;
+        }
+        let handle = tokio::spawn(async move {
+            log::info!("kg_watch: watching {root:?} for changes");
+            loop {
+                match rx.recv() {
+                    Ok(Ok(event)) => {
+                        let relevant = event.paths.iter().any(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e, "rs" | "py" | "ts" | "tsx" | "js" | "jsx" | "java" | "go" | "rb" | "php" | "swift" | "kt" | "c" | "cpp" | "h" | "hpp" | "cs" | "scala" | "sh" | "bash" | "zsh")));
+                        if !relevant { continue; }
+                        if matches!(event.kind, EventKind::Modify(_)) {
+                            if scan_running.load(std::sync::atomic::Ordering::Acquire) { continue; }
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        }
+                        log::info!("kg_watch: change detected, re-scanning...");
+                        if let Err(e) = store_clone.scan_codebase(&root).await {
+                            log::warn!("kg_watch: scan failed: {e}");
+                        }
+                    }
+                    Ok(Err(e)) => log::warn!("kg_watch: error: {e}"),
+                    Err(_) => break,
+                }
+            }
+        });
+        if let Ok(mut h) = self.watch_handle.lock() { *h = Some(handle); }
+        std::mem::forget(watcher);
+    }
+
+    /// Stop file watcher.
+    pub fn stop_watch(&self) {
+        if let Ok(mut h) = self.watch_handle.lock() {
+            if let Some(handle) = h.take() { handle.abort(); log::info!("kg_watch: stopped"); }
+        }
+    }
+
+    /// Scan git history and write commit/file relationships.
+    async fn scan_git_history(&self, git_root: &std::path::Path, project: &Option<String>) -> Result<()> {
+        use std::process::Command;
+        let now = chrono::Utc::now().to_rfc3339();
+        let output = Command::new("git")
+            .args(["log", "--name-only", "--pretty=format:COMMIT%x00%H%x00%s%x00%an%x00%ai", "-100", "--diff-filter=AM"])
+            .current_dir(git_root).output()?;
+        if !output.status.success() { return Ok(()); }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut commit_hash = String::new();
+        let mut commit_msg = String::new();
+        let mut commit_author = String::new();
+        let mut in_files = false;
+        for line in stdout.lines() {
+            if line.starts_with("COMMIT ") {
+                if !commit_hash.is_empty() && in_files {
+                    let cid = format!("commit:{}", &commit_hash[..8]);
+                    let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(&project).bind(&now).execute(&self.pool).await;
+                    if !commit_msg.is_empty() {
+                        let ms: String = commit_msg.chars().take(80).collect();
+                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(&project).bind(&now).execute(&self.pool).await;
+                    }
+                    if !commit_author.is_empty() {
+                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(&project).bind(&now).execute(&self.pool).await;
+                    }
+                }
+                let parts: Vec<&str> = line.split(' ').collect();
+                if parts.len() >= 5 {
+                    commit_hash = parts[1].to_string();
+                    commit_msg = parts[2].to_string();
+                    commit_author = parts[3].to_string();
+                }
+                in_files = true;
+            } else if in_files && !line.is_empty() {
+                let file_path = line.trim();
+                if file_path.is_empty() { continue; }
+                let cid = format!("commit:{}", &commit_hash[..8]);
+                let stem = std::path::Path::new(file_path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(format!("file:{}", stem)).bind("modified_in").bind(&cid).bind(&project).bind(&now).execute(&self.pool).await;
+            }
+        }
+        if !commit_hash.is_empty() && in_files {
+            let cid = format!("commit:{}", &commit_hash[..8]);
+            let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(&project).bind(&now).execute(&self.pool).await;
+            if !commit_msg.is_empty() {
+                let ms: String = commit_msg.chars().take(80).collect();
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(&project).bind(&now).execute(&self.pool).await;
+            }
+            if !commit_author.is_empty() {
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(&project).bind(&now).execute(&self.pool).await;
+            }
+        }
+        Ok(())
     }
 
     pub async fn save(&self, input: NewMemory) -> Result<String> {
@@ -970,6 +1086,10 @@ fn parse_json(val: &Option<String>) -> Option<Vec<String>> {
 }
 
 /// Detect project name from path or git for code scanning.
+fn detect_project_git_root(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    std::process::Command::new("git").args(["rev-parse", "--show-toplevel"]).current_dir(root).output().ok().and_then(|o| if o.status.success() { let p = String::from_utf8_lossy(&o.stdout).trim().to_string(); if p.is_empty() { None } else { Some(std::path::PathBuf::from(p)) } } else { None })
+}
+
 fn detect_project_for_scan(root: &std::path::Path) -> Option<String> {
     // Try git first
     if let Ok(output) = std::process::Command::new("git")
