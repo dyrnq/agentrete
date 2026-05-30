@@ -153,12 +153,22 @@ impl Store {
 
     async fn initialize(&self) -> Result<()> {
         sqlx::query("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY, migrated_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
-        sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, source_file TEXT, importance INTEGER DEFAULT 3, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT)").execute(&self.pool).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, source_file TEXT, importance INTEGER DEFAULT 3, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT, deleted_at TEXT)").execute(&self.pool).await?;
         let _ = sqlx::query("ALTER TABLE memories ADD COLUMN source_file TEXT")
             .execute(&self.pool)
             .await;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_embed_null ON memories(embedding) WHERE embedding IS NULL").execute(&self.pool).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at)")
+            .execute(&self.pool)
+            .await?;
         sqlx::query("CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content, content_rowid='rowid', tokenize='unicode61')").execute(&self.pool).await?;
+        // FTS auto-sync: INSERT trigger
+        sqlx::query("CREATE TRIGGER IF NOT EXISTS memories_fts_ai AFTER INSERT ON memories WHEN new.deleted_at IS NULL BEGIN INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END;").execute(&self.pool).await?;
+        // FTS auto-sync: soft-delete removes from FTS
+        sqlx::query("CREATE TRIGGER IF NOT EXISTS memories_fts_au AFTER UPDATE OF deleted_at ON memories WHEN new.deleted_at IS NOT NULL AND old.deleted_at IS NULL BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); END;").execute(&self.pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, data TEXT, metadata TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY, content TEXT, tool_name TEXT, session_id TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
         Ok(())
@@ -178,15 +188,6 @@ impl Store {
         sqlx::query("INSERT INTO memories (id,type,content,tags,files,project,source_file,importance,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)")
             .bind(&id).bind(&input.memory_type).bind(&input.content).bind(&tags).bind(&files).bind(&input.project).bind(&input.source_file).bind(0.5).bind(&now)
             .execute(&self.pool).await?;
-        let rowid: i64 = sqlx::query_scalar("SELECT rowid FROM memories WHERE id=?1")
-            .bind(&id)
-            .fetch_one(&self.pool)
-            .await?;
-        sqlx::query("INSERT INTO memories_fts(rowid,content) VALUES (?1,?2)")
-            .bind(rowid)
-            .bind(&input.content)
-            .execute(&self.pool)
-            .await?;
         // embedding=NULL — embed-worker picks it up later
         Ok(id)
     }
@@ -220,7 +221,7 @@ impl Store {
         // KNN via vec0 virtual table
         let rows: Vec<(String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<i32>, Option<String>, f64)> =
             sqlx::query_as(
-                "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid                  WHERE v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
+                "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid WHERE m.deleted_at IS NULL AND v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
             )
             .bind(&json_vec)
             .bind(lim)
@@ -328,10 +329,10 @@ impl Store {
     ) -> Result<Vec<SearchResult>> {
         let lim = limit.min(100) as i64;
         let rows: Vec<SearchRow> = if let Some(t) = memory_type {
-            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 ORDER BY rank LIMIT ?3")
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?3")
                 .bind(query).bind(t).bind(lim).fetch_all(&self.pool).await?
         } else {
-            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2")
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?2")
                 .bind(query).bind(lim).fetch_all(&self.pool).await?
         };
         Ok(rows
@@ -366,10 +367,10 @@ impl Store {
         // Step 2: FTS5 recall (wider window for reranking)
         let recall_limit = (limit as i64 * 3).min(100);
         let rows: Vec<SearchRow> = if let Some(t) = memory_type {
-            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 ORDER BY rank LIMIT ?3")
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?3")
                 .bind(query).bind(t).bind(recall_limit).fetch_all(&self.pool).await?
         } else {
-            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2")
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?2")
                 .bind(query).bind(recall_limit).fetch_all(&self.pool).await?
         };
 
@@ -431,10 +432,10 @@ impl Store {
 
     pub async fn list(&self, limit: u8, memory_type: Option<&str>) -> Result<Vec<Memory>> {
         let rows: Vec<MemoryRow> = if let Some(t) = memory_type {
-            sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories WHERE type=?1 ORDER BY created_at DESC LIMIT ?2")
+            sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories WHERE type=?1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?2")
                 .bind(t).bind(limit.min(100) as i64).fetch_all(&self.pool).await?
         } else {
-            sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories ORDER BY created_at DESC LIMIT ?1")
+            sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?1")
                 .bind(limit.min(100) as i64).fetch_all(&self.pool).await?
         };
         Ok(rows
@@ -456,18 +457,10 @@ impl Store {
     }
 
     pub async fn forget(&self, id: &str) -> Result<()> {
-        // Delete from FTS5 index first (by rowid)
-        let rowid: Option<i64> = sqlx::query_scalar("SELECT rowid FROM memories WHERE id=?1")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
-        if let Some(rid) = rowid {
-            sqlx::query("DELETE FROM memories_fts WHERE rowid=?1")
-                .bind(rid)
-                .execute(&self.pool)
-                .await?;
-        }
-        sqlx::query("DELETE FROM memories WHERE id=?1")
+        // Soft-delete: set deleted_at. FTS TRIGGER removes from index automatically.
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("UPDATE memories SET deleted_at=?1 WHERE id=?2 AND deleted_at IS NULL")
+            .bind(&now)
             .bind(id)
             .execute(&self.pool)
             .await?;
@@ -491,13 +484,14 @@ impl Store {
     }
 
     pub async fn stats(&self) -> Result<DbStats> {
-        let mc: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+        let mc: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL")
             .fetch_one(&self.pool)
             .await?;
-        let we: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE embedding IS NOT NULL")
-                .fetch_one(&self.pool)
-                .await?;
+        let we: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL WHERE embedding IS NOT NULL",
+        )
+        .fetch_one(&self.pool)
+        .await?;
         let sc: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
             .fetch_one(&self.pool)
             .await
@@ -509,13 +503,13 @@ impl Store {
 
         // Type distribution
         let rows: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT COALESCE(type,'(none)') as t, COUNT(*) as c FROM memories GROUP BY type ORDER BY c DESC",
+            "SELECT COALESCE(type,'(none)') as t, COUNT(*) as c FROM memories WHERE deleted_at IS NULL GROUP BY type ORDER BY c DESC",
         )
         .fetch_all(&self.pool).await?;
 
         // Current model info
         let model: Option<(String, i64)> = sqlx::query_as(
-            "SELECT embedding_model, embedding_dims FROM memories WHERE embedding IS NOT NULL LIMIT 1",
+            "SELECT embedding_model, embedding_dims FROM memories WHERE embedding IS NOT NULL AND deleted_at IS NULL LIMIT 1",
         )
         .fetch_optional(&self.pool).await?;
         let model_info = model.map(|(m, d)| format!("{m} ({d}d)"));
@@ -541,18 +535,20 @@ impl Store {
             return self.compact_semantic(threshold).await;
         }
 
-        let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
-            .fetch_one(&self.pool)
-            .await?;
+        let before: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL")
+                .fetch_one(&self.pool)
+                .await?;
 
         sqlx::query(
             "DELETE FROM memories WHERE rowid NOT IN (SELECT MIN(rowid) FROM memories GROUP BY content, COALESCE(type,''))",
         )
         .execute(&self.pool).await?;
 
-        let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
-            .fetch_one(&self.pool)
-            .await?;
+        let after: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL")
+                .fetch_one(&self.pool)
+                .await?;
 
         self.rebuild_fts().await?;
         sqlx::query("VACUUM").execute(&self.pool).await?;
@@ -561,19 +557,21 @@ impl Store {
     }
 
     async fn compact_semantic(&self, threshold: f32) -> Result<(usize, usize)> {
-        let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
-            .fetch_one(&self.pool)
-            .await?;
+        let before: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL")
+                .fetch_one(&self.pool)
+                .await?;
 
         #[derive(sqlx::FromRow)]
         struct EmbedRow {
             id: String,
             embedding: Vec<u8>,
         }
-        let rows: Vec<EmbedRow> =
-            sqlx::query_as("SELECT id, embedding FROM memories WHERE embedding IS NOT NULL")
-                .fetch_all(&self.pool)
-                .await?;
+        let rows: Vec<EmbedRow> = sqlx::query_as(
+            "SELECT id, embedding FROM memories WHERE embedding IS NOT NULL AND deleted_at IS NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         if rows.len() < 2 {
             return Ok((0, before as usize));
         }
@@ -624,9 +622,10 @@ impl Store {
             }
         }
 
-        let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
-            .fetch_one(&self.pool)
-            .await?;
+        let after: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL")
+                .fetch_one(&self.pool)
+                .await?;
         self.rebuild_fts().await?;
         sqlx::query("VACUUM").execute(&self.pool).await?;
         Ok(((before - after) as usize, after as usize))
@@ -651,7 +650,7 @@ impl Store {
         batch_size: usize,
     ) -> Result<usize> {
         let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT id, content FROM memories WHERE embedding IS NULL OR embedding_model IS NOT ?2 OR embedding_dims IS NOT ?3 ORDER BY embedding IS NULL DESC, created_at ASC LIMIT ?1",
+            "SELECT id, content FROM memories WHERE deleted_at IS NULL AND (embedding IS NULL OR embedding_model IS NOT ?2 OR embedding_dims IS NOT ?3) ORDER BY embedding IS NULL DESC, created_at ASC LIMIT ?1",
         )
         .bind(batch_size as i64)
         .bind(model_name)
