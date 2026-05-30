@@ -20,7 +20,7 @@ Result: **10–500MB model, 0.1ms per text on CPU, zero GPU needed.**
 **BAAI/bge-m3** is the recommended model for agentrete. XLM-RoBERTa backbone,
 100+ languages, 1024d source.
 
-Distilled at 4 dimensions via `.dev/distill-bge-m3.py`:
+Distilled at 4 dimensions via `scripts/distill-bge-m3.py`:
 
 | dim | model.safetensors | total size | load time* | best for |
 |-----|------------------|-----------|-----------|----------|
@@ -46,10 +46,10 @@ Accuracy:
 
 ```bash
 # Distill all 4 dimensions (downloads 2.2GB once, PCA is fast)
-cd /path/to/agentrete && uv run .dev/distill-bge-m3.py
+cd /path/to/agentrete && uv run scripts/distill-bge-m3.py
 
 # Or pick specific dims
-uv run .dev/distill-bge-m3.py 512
+uv run scripts/distill-bge-m3.py 512
 
 # Then configure agentrete
 cat >> ~/.agentrete/config.toml << TOML
@@ -72,12 +72,12 @@ The `[distill]` extra installs `sentence-transformers`, `torch`, `tokenizers`, a
 
 ## Distillation Script
 
-`.dev/distill-bge-m3.py` — multi-dimension distillation with progress logging.
+`scripts/distill-bge-m3.py` — multi-dimension distillation with progress logging.
 
 ```bash
-uv run .dev/distill-bge-m3.py          # all: 256 512 768 1024
-uv run .dev/distill-bge-m3.py 512      # single dim
-uv run .dev/distill-bge-m3.py 256 512  # specific dims
+uv run scripts/distill-bge-m3.py          # all: 256 512 768 1024
+uv run scripts/distill-bge-m3.py 512      # single dim
+uv run scripts/distill-bge-m3.py 256 512  # specific dims
 ```
 
 Output: `~/.cache/model2vec/bge-m3-{dim}d/` for each dimension.
