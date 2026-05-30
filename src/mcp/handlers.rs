@@ -15,7 +15,7 @@ pub(crate) fn tools_list() -> Value {
         {"name":"memory_stats","description":"Stats","inputSchema":{"type":"object","properties":{},"required":[]}},
         {"name":"memory_compact","description":"Deduplicate memories (exact or semantic) and reclaim disk space","inputSchema":{"type":"object","properties":{"mode":{"type":"string"}},"required":[]}},
         {"name":"kg_query","description":"Query knowledge graph: neighbors, shortest path, or subgraph","inputSchema":{"type":"object","properties":{"mode":{"type":"string"},"entity":{"type":"string"},"target":{"type":"string"},"predicate":{"type":"string"},"direction":{"type":"string"},"project":{"type":"string"}},"required":["mode"]}},
-        {"name":"kg_scan","description":"Scan a codebase with ast-grep and build knowledge graph","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}
+        {"name":"kg_scan","description":"Start a codebase scan in background. Results are saved automatically when done.","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},{"name":"kg_scan_status","description":"Check if a background scan is running","inputSchema":{"type":"object","properties":{},"required":[]}}
     ]})
 }
 
@@ -206,15 +206,30 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                     }
                 }
                 "kg_scan" => {
-                    let path = a["path"].as_str().unwrap_or(".");
+                    let path = a["path"].as_str().unwrap_or(".").to_string();
                     if !store.graph.is_enabled() {
                         jsonrpc_err(&id, -32000, "Knowledge graph is disabled. Set [knowledge_graph] enabled = true in config.")
+                    } else if store.scan_running.load(std::sync::atomic::Ordering::Acquire) {
+                        jsonrpc_err(&id, -32001, "A scan is already in progress. Check kg_scan_status for progress.")
                     } else {
-                        match store.scan_codebase(std::path::Path::new(path)).await {
-                            Ok((syms, rels)) => jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":format!("Scanned: {} symbols, {} relationships", syms, rels)}]})),
-                            Err(e) => jsonrpc_err(&id, -32000, &format!("Scan failed: {}", e)),
-                        }
+                        let store2 = store.clone();
+                        tokio::spawn(async move {
+                            match store2.scan_codebase(std::path::Path::new(&path)).await {
+                                Ok((syms, rels)) => log::info!("kg_scan task done: {} symbols, {} relations", syms, rels),
+                                Err(e) => log::warn!("kg_scan task failed: {}", e),
+                            }
+                        });
+                        jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":"Scan started in background. Use kg_scan_status to check progress."}]}))
                     }
+                }
+                "kg_scan_status" => {
+                    let running = store.scan_running.load(std::sync::atomic::Ordering::Acquire);
+                    let text = if running {
+                        "Scan is running...".to_string()
+                    } else {
+                        "No scan running. Run kg_scan to start one.".to_string()
+                    };
+                    jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":text}]}))
                 }
                 "kg_query" => {
                     let mode = a["mode"].as_str().unwrap_or("");
