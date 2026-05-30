@@ -59,4 +59,7 @@ pub struct DbStats {
     pub observation_count: i64,
     pub db_path: String,
     pub db_size_bytes: u64,
+    pub schema_version: i64,
+    pub vec0_enabled: bool,
+    pub tool_count: usize,
 }

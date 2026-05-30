@@ -541,6 +541,11 @@ impl Store {
         let model_info = model.map(|(m, d)| format!("{m} ({d}d)"));
 
         let db_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+        let schema_version: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(version), 1) FROM _schema_version")
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(1);
         Ok(DbStats {
             memory_count: mc,
             with_embedding: we,
@@ -550,6 +555,9 @@ impl Store {
             observation_count: oc,
             db_path: self.path.to_string_lossy().to_string(),
             db_size_bytes: db_size,
+            schema_version,
+            vec0_enabled: self.vec_enabled,
+            tool_count: 6,
         })
     }
 

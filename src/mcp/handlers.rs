@@ -183,6 +183,16 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                         if let Some(ref mi) = s.model_info {
                             text.push_str(&format!("Model: {}\n", mi));
                         }
+                        text.push_str(&format!(
+                            "Schema: v{}\nVec0: {}\nTools: {}\n",
+                            s.schema_version,
+                            if s.vec0_enabled {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            },
+                            s.tool_count
+                        ));
                         if !s.type_counts.is_empty() {
                             text.push_str("By type:\n");
                             for (t, c) in &s.type_counts {

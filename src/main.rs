@@ -290,7 +290,10 @@ fn main() -> anyhow::Result<()> {
 
 async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> {
     let embedder = if cfg.embedding.backend != crate::config::EmbeddingBackend::None {
-        eprintln!("Loading embedding model (backend={:?})...", cfg.embedding.backend);
+        eprintln!(
+            "Loading embedding model (backend={:?})...",
+            cfg.embedding.backend
+        );
         let emb = crate::embed::embeddings::Embedder::from_config(&cfg.embedding);
         match emb {
             Ok(e) => {
