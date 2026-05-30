@@ -123,7 +123,7 @@ _phase-7:
 	-systemctl --user daemon-reload 2>/dev/null
 	systemctl --user restart agentrete.service
 	@sleep 5
-	python3 /tmp/insert_10k.py $(TEST_DB)/memory.db
+	python3 scripts/insert-10k.py $(TEST_DB)/memory.db
 	@sleep 20
 	@curl -s http://127.0.0.1:$(PORT)/ \
 	  -d '{"method":"tools/call","params":{"name":"memory_stats","arguments":{}},"id":1}' \
