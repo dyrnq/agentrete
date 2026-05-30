@@ -87,6 +87,30 @@ pub struct Model2VecConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Search tuning parameters.
+pub struct SearchConfig {
+    /// RRF merge constant (higher = less impact from ranking position).
+    #[serde(default = "default_rrf_k")]
+    pub rrf_k: f64,
+    /// Temporal decay half-life in days.
+    #[serde(default = "default_half_life")]
+    pub half_life_days: f64,
+    /// Default search result limit.
+    #[serde(default = "default_search_limit")]
+    pub default_limit: u8,
+}
+
+fn default_rrf_k() -> f64 {
+    60.0
+}
+fn default_half_life() -> f64 {
+    90.0
+}
+fn default_search_limit() -> u8 {
+    10
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
     /// Backend type: none, local, remote.
     #[serde(default)]
@@ -144,6 +168,10 @@ pub struct Config {
     /// Custom cache directory (default: $HOME/.cache).
     #[serde(default)]
     pub cache_dir: Option<PathBuf>,
+
+    /// Search tuning.
+    #[serde(default)]
+    pub search: SearchConfig,
 }
 
 fn default_port_val() -> u16 {
@@ -157,6 +185,17 @@ impl Default for Config {
             embedding: EmbeddingConfig::default(),
             db_dir: None,
             cache_dir: None,
+            search: SearchConfig::default(),
+        }
+    }
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        Self {
+            rrf_k: default_rrf_k(),
+            half_life_days: default_half_life(),
+            default_limit: default_search_limit(),
         }
     }
 }

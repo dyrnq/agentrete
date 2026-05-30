@@ -26,45 +26,30 @@ pub struct Store {
     embedder: Option<Arc<Embedder>>,
     vec_enabled: bool,
     vec_dims: usize,
+    rrf_k: f64,
+    half_life_days: f64,
 }
 
 /// Reciprocal Rank Fusion: merge vec0 KNN and FTS5 BM25 ranked lists.
 /// RRF score = sum(1 / (K + rank)) across lists, with K=60.
 /// Returns top-k results sorted by RRF score descending.
-/// Multiply score by e^(-days/half_life). Default half-life: 90 days.
-const DEFAULT_HALF_LIFE_DAYS: f64 = 90.0;
-
-fn temporal_decay(score: f64, created_at: &str) -> f64 {
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at) {
-        let fixed: chrono::DateTime<Utc> = dt.into();
-        let age_days = (Utc::now() - fixed).num_hours() as f64 / 24.0;
-        if age_days > 0.0 {
-            score * (-age_days / DEFAULT_HALF_LIFE_DAYS).exp()
-        } else {
-            score
-        }
-    } else {
-        score
-    }
-}
-
 fn rrf_merge(
     vec_results: Vec<SearchResult>,
     fts_results: Vec<SearchResult>,
     k: usize,
+    rrf_k: f64,
 ) -> Vec<SearchResult> {
-    const RRF_K: f64 = 60.0;
     use std::collections::HashMap;
 
     let mut scores: HashMap<&str, f64> = HashMap::new();
     let mut data: HashMap<&str, &SearchResult> = HashMap::new();
 
     for (rank, r) in vec_results.iter().enumerate() {
-        *scores.entry(r.id.as_str()).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
+        *scores.entry(r.id.as_str()).or_default() += 1.0 / (rrf_k + rank as f64 + 1.0);
         data.entry(r.id.as_str()).or_insert(r);
     }
     for (rank, r) in fts_results.iter().enumerate() {
-        *scores.entry(r.id.as_str()).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
+        *scores.entry(r.id.as_str()).or_default() += 1.0 / (rrf_k + rank as f64 + 1.0);
         data.entry(r.id.as_str()).or_insert(r);
     }
 
@@ -84,7 +69,7 @@ fn rrf_merge(
                 project: r.project.clone(),
                 source_file: r.source_file.clone(),
                 importance: r.importance,
-                score: temporal_decay(score, &r.created_at),
+                score,
                 created_at: r.created_at.clone(),
                 embedding: r.embedding.clone(),
             })
@@ -160,6 +145,8 @@ impl Store {
             embedder: embedder.map(Arc::new),
             vec_enabled,
             vec_dims: dims,
+            rrf_k: cfg.search.rrf_k,
+            half_life_days: cfg.search.half_life_days,
         };
         if vec_enabled {
             store.init_vec().await?;
@@ -317,7 +304,7 @@ impl Store {
             if !fts_results.is_empty() {
                 let mut fts_results = fts_results;
                 for r in &mut fts_results {
-                    r.score = temporal_decay(r.score, &r.created_at);
+                    r.score = self.decay_score(r.score, &r.created_at);
                 }
                 log::info!("rrf: FTS5-only ({} results)", fts_results.len());
                 return Ok(fts_results);
@@ -338,10 +325,10 @@ impl Store {
 
         // Apply temporal decay to vec_results before merge
         for r in &mut vec_results {
-            r.score = temporal_decay(r.score, &r.created_at);
+            r.score = self.decay_score(r.score, &r.created_at);
         }
 
-        let merged = rrf_merge(vec_results, fts_results, k);
+        let merged = rrf_merge(vec_results, fts_results, k, self.rrf_k);
         log::info!("rrf: merged {} results", merged.len());
         Ok(merged)
     }
@@ -507,6 +494,21 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Multiply score by e^(-days/half_life) for temporal decay.
+    fn decay_score(&self, score: f64, created_at: &str) -> f64 {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at) {
+            let fixed: chrono::DateTime<Utc> = dt.into();
+            let age_days = (Utc::now() - fixed).num_hours() as f64 / 24.0;
+            if age_days > 0.0 {
+                score * (-age_days / self.half_life_days).exp()
+            } else {
+                score
+            }
+        } else {
+            score
+        }
     }
 
     pub async fn stats(&self) -> Result<DbStats> {
