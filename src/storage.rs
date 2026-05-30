@@ -206,6 +206,31 @@ impl Store {
     }
 
     async fn init_vec(&self) -> Result<()> {
+        // Check if existing vec0 table has wrong dimensions
+        let rebuild_needed: bool = sqlx::query_scalar(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='vec_memories' AND sql NOT LIKE '%' || ?1 || '%'",
+        )
+        .bind(format!("float[{}]", self.vec_dims))
+        .fetch_optional(&self.pool)
+        .await?
+        .unwrap_or(false);
+
+        if rebuild_needed {
+            log::info!(
+                "init_vec: existing vec_memories has wrong dims, rebuilding for {}d",
+                self.vec_dims
+            );
+            sqlx::query("DROP TABLE IF EXISTS vec_memories")
+                .execute(&self.pool)
+                .await?;
+            // Clear old embeddings — they will be recomputed by embed worker
+            sqlx::query(
+                "UPDATE memories SET embedding = NULL, embedding_model = NULL, embedding_dims = NULL"
+            )
+            .execute(&self.pool)
+            .await?;
+        }
+
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[{dims}])",
             dims = self.vec_dims,
