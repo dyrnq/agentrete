@@ -86,7 +86,10 @@ fn rrf_merge(
 impl Store {
     pub async fn open(cfg: &crate::config::Config, embedder: Option<Embedder>) -> Result<Self> {
         let dims = match cfg.embedding.backend {
-            crate::config::EmbeddingBackend::None => { log::info!("backend=none, dims=0, vec disabled"); 0 },
+            crate::config::EmbeddingBackend::None => {
+                log::info!("backend=none, dims=0, vec disabled");
+                0
+            }
             crate::config::EmbeddingBackend::Remote => {
                 cfg.embedding.remote.dims.unwrap_or(768) as usize
             }
@@ -166,7 +169,7 @@ impl Store {
 
     async fn initialize(&self) -> Result<()> {
         sqlx::query("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY, migrated_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
-        sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, source_file TEXT, importance INTEGER DEFAULT 3, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT, deleted_at TEXT)").execute(&self.pool).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, source_file TEXT, importance INTEGER DEFAULT 3, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT)").execute(&self.pool).await?;
         let _ = sqlx::query("ALTER TABLE memories ADD COLUMN source_file TEXT")
             .execute(&self.pool)
             .await;
@@ -175,6 +178,9 @@ impl Store {
             .execute(&self.pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_deleted_at ON memories(deleted_at) WHERE deleted_at IS NOT NULL")
             .execute(&self.pool)
             .await?;
         sqlx::query("CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content, content_rowid='rowid', tokenize='unicode61')").execute(&self.pool).await?;
@@ -206,24 +212,24 @@ impl Store {
     }
 
     async fn init_vec(&self) -> Result<()> {
-        // Check if existing vec0 table has wrong dimensions
-        let rebuild_needed: bool = sqlx::query_scalar(
-            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='vec_memories' AND sql NOT LIKE '%' || ?1 || '%'",
+        // Check if existing embeddings use wrong dimensions
+        // Use most common stored dims (not LIMIT 1 — might hit stale row)
+        let stored_dims: Option<i64> = sqlx::query_scalar(
+            "SELECT embedding_dims FROM memories WHERE embedding IS NOT NULL GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1"
         )
-        .bind(format!("float[{}]", self.vec_dims))
         .fetch_optional(&self.pool)
-        .await?
-        .unwrap_or(false);
+        .await?;
 
-        if rebuild_needed {
+        let needs_rebuild =
+            self.vec_dims > 0 && stored_dims.is_some_and(|d| d as usize != self.vec_dims);
+        if needs_rebuild {
             log::info!(
-                "init_vec: existing vec_memories has wrong dims, rebuilding for {}d",
+                "init_vec: stored dims != {}, dropping vec0 + clearing embeddings",
                 self.vec_dims
             );
             sqlx::query("DROP TABLE IF EXISTS vec_memories")
                 .execute(&self.pool)
                 .await?;
-            // Clear old embeddings — they will be recomputed by embed worker
             sqlx::query(
                 "UPDATE memories SET embedding = NULL, embedding_model = NULL, embedding_dims = NULL"
             )
@@ -506,10 +512,8 @@ impl Store {
     }
 
     pub async fn forget(&self, id: &str) -> Result<()> {
-        // Soft-delete: set deleted_at. FTS TRIGGER removes from index automatically.
-        let now = Utc::now().to_rfc3339();
-        sqlx::query("UPDATE memories SET deleted_at=?1 WHERE id=?2 AND deleted_at IS NULL")
-            .bind(&now)
+        // Hard delete. FTS TRIGGER removes from index automatically.
+        sqlx::query("DELETE FROM memories WHERE id=?1")
             .bind(id)
             .execute(&self.pool)
             .await?;
