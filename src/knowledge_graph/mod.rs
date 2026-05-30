@@ -212,3 +212,164 @@ impl KnowledgeGraph {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn make_test_graph() -> KnowledgeGraph {
+        let inner = Arc::new(RwLock::new(GraphInner {
+            graph: DiGraph::new(),
+            node_index: HashMap::new(),
+        }));
+        KnowledgeGraph { inner, enabled: true }
+    }
+
+    #[test]
+    fn test_basic_neighbors() {
+        let kg = make_test_graph();
+        kg.add_triple_local("agentrete", "uses", "sqlx", 1.0, None);
+        kg.add_triple_local("agentrete", "uses", "axum", 0.9, None);
+        kg.add_triple_local("agentrete", "deprecated", "rusqlite", 0.8, None);
+
+        // All outgoing
+        let n = kg.query_neighbors("agentrete", None, "outgoing");
+        assert_eq!(n.len(), 3);
+        assert!(n.iter().any(|(t, _, _)| t == "sqlx"));
+        assert!(n.iter().any(|(t, _, _)| t == "axum"));
+        assert!(n.iter().any(|(t, _, _)| t == "rusqlite"));
+
+        // Filter by predicate
+        let n = kg.query_neighbors("agentrete", Some("uses"), "outgoing");
+        assert_eq!(n.len(), 2);
+        assert!(n.iter().all(|(_, r, _)| r == "uses"));
+
+        // Direction filter
+        let n = kg.query_neighbors("sqlx", None, "incoming");
+        assert_eq!(n.len(), 1);
+        assert!(n[0].0 == "agentrete");
+    }
+
+    #[test]
+    fn test_no_relations() {
+        let kg = make_test_graph();
+        let n = kg.query_neighbors("nonexistent", None, "outgoing");
+        assert!(n.is_empty());
+    }
+
+    #[test]
+    fn test_query_path() {
+        let kg = make_test_graph();
+        kg.add_triple_local("a", "knows", "b", 1.0, None);
+        kg.add_triple_local("b", "knows", "c", 1.0, None);
+
+        let path = kg.query_path("a", "c");
+        assert!(path.is_some());
+        let p = path.unwrap();
+        assert_eq!(p, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_path_no_connection() {
+        let kg = make_test_graph();
+        kg.add_triple_local("a", "knows", "b", 1.0, None);
+        kg.add_triple_local("c", "knows", "d", 1.0, None);
+
+        let path = kg.query_path("a", "d");
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn test_path_same_node() {
+        let kg = make_test_graph();
+        kg.add_triple_local("a", "knows", "b", 1.0, None);
+
+        let path = kg.query_path("a", "a");
+        assert!(path.is_some());
+        assert_eq!(path.unwrap(), vec!["a"]);
+    }
+
+    #[test]
+    fn test_disabled_graph() {
+        let kg = KnowledgeGraph::disabled();
+        assert!(!kg.is_enabled());
+        let n = kg.query_neighbors("anything", None, "outgoing");
+        assert!(n.is_empty());
+    }
+
+    #[test]
+    fn test_add_twice_same_nodes() {
+        let kg = make_test_graph();
+        kg.add_triple_local("node", "rel1", "target", 1.0, None);
+        kg.add_triple_local("node", "rel2", "target", 1.0, None);
+
+        let n = kg.query_neighbors("node", None, "outgoing");
+        assert_eq!(n.len(), 2);
+        assert_eq!(n[0].0, "target");
+        assert_eq!(n[1].0, "target");
+    }
+
+    #[test]
+    fn test_confidence_and_source() {
+        let kg = make_test_graph();
+        kg.add_triple_local("x", "uses", "y", 0.5, Some("mem_123".into()));
+
+        let inner = kg.inner.read().unwrap();
+        let idx = inner.node_index.get("x").unwrap();
+        let edge = inner.graph.edges_directed(*idx, petgraph::Direction::Outgoing)
+            .next().unwrap();
+        assert!((edge.weight().confidence - 0.5).abs() < 1e-6);
+        assert_eq!(edge.weight().source_memory_id, Some("mem_123".to_string()));
+    }
+
+    #[test]
+    fn test_extract_name() {
+        let cases = vec![
+            ("fn main() {", "main"),
+            ("pub fn foo()", "foo"),
+            ("async fn bar()", "bar"),
+            ("pub async fn baz()", "baz"),
+            ("struct Foo {", "Foo"),
+            ("struct Foo<T> {", "Foo"),
+            ("pub struct Bar", "Bar"),
+            ("enum Color {", "Color"),
+            ("trait Into {", "Into"),
+            ("class Hello {", "Hello"),
+            ("def hello():", "hello"),
+            ("pub(crate) fn inside()", "inside"),
+            ("pub unsafe fn danger()", "danger"),
+            ("const MAX: usize = 100;", "MAX"),
+            ("static NAME: &str = 'x';", "NAME"),
+        ];
+        for (input, expected) in cases {
+            let result = super::scanner::extract_name(input);
+            assert_eq!(result, expected, "extract_name({:?}) should be {:?}", input, expected);
+        }
+    }
+
+    #[test]
+    fn test_extract_import_target() {
+        let cases: Vec<(&str, &str, &str)> = vec![
+            ("use std::collections::HashMap", "rust", "std"),
+            ("import os", "python", "os"),
+            ("from pathlib import Path", "python", "pathlib"),
+            ("import java.util.List", "java", "java"),
+            ("import { x } from 'react'", "typescript", "react"),
+            ("import \"fmt\"", "go", "fmt"),
+        ];
+        for (text, lang, expected) in cases {
+            let result = super::scanner::extract_import_target(text, lang);
+            assert_eq!(result, expected, "extract_import_target({:?}, {:?}) should be {:?}", text, lang, expected);
+        }
+    }
+
+    #[test]
+    fn test_kind_to_symbol_kind() {
+        assert_eq!(super::scanner::kind_to_symbol_kind("struct_item"), "struct");
+        assert_eq!(super::scanner::kind_to_symbol_kind("function_item"), "function");
+        assert_eq!(super::scanner::kind_to_symbol_kind("class_declaration"), "class");
+        assert_eq!(super::scanner::kind_to_symbol_kind("unknown_thing"), "unknown_thing");
+    }
+}

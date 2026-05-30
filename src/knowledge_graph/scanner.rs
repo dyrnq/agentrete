@@ -214,24 +214,46 @@ pub fn scan_directory(root: &Path) -> Result<(Vec<Symbol>, Vec<Relation>)> {
     Ok((all_symbols, all_relations))
 }
 
-fn extract_name(text: &str) -> String {
+pub fn extract_name(text: &str) -> String {
     let text = text.trim();
-    if let Some(rest) = text.split_once(char::is_whitespace).map(|(_, r)| r) {
-        let name = rest
-            .split(&['(', '{', ':', ' ', '\t', '<', ';', '\n', '='][..])
-            .next()
-            .unwrap_or(rest)
-            .trim()
-            .trim_matches('"')
-            .to_string();
-        if !name.is_empty() {
-            return name;
+    let keywords = [
+        "pub", "async", "unsafe", "extern", "fn", "struct", "enum", "trait",
+        "impl", "type", "const", "static", "module", "class", "def",
+        "interface", "abstract", "sealed", "open", "data", "case",
+        "object", "record", "protocol", "extension", "where", "for",
+        "public", "private", "protected", "internal", "override",
+        "virtual", "inline", "export", "declare", "mut", "ref", "let",
+    ];
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    for token in &tokens {
+        // Extract alphanumeric + underscore prefix (drop generics, parens, etc.)
+        let clean: String = token.trim().chars()
+            .skip_while(|c| *c == '(' || *c == '<' || *c == '\'')
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if clean.is_empty() || keywords.contains(&clean.as_str()) || clean.starts_with("pub(") {
+            continue;
+        }
+        return clean;
+    }
+    // Fallback: look for identifier after keyword patterns
+    let triggers = ["fn ", "struct ", "enum ", "trait ", "class ", "def ", "interface ", "type "];
+    for t in &triggers {
+        if let Some(rest) = text.split_once(t).map(|(_, r)| r.trim()) {
+            let name: String = rest.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '!' || *c == '?')
+                .collect();
+            if !name.is_empty() && !keywords.contains(&name.as_str()) {
+                return name;
+            }
         }
     }
     text.to_string()
 }
 
-fn extract_import_target(text: &str, lang: &str) -> String {
+
+
+pub fn extract_import_target(text: &str, lang: &str) -> String {
     match lang {
         "rust" => text.strip_prefix("use ")
             .and_then(|s| s.split("::").next())
@@ -254,7 +276,7 @@ fn extract_import_target(text: &str, lang: &str) -> String {
     }
 }
 
-fn kind_to_symbol_kind(kind: &str) -> String {
+pub fn kind_to_symbol_kind(kind: &str) -> String {
     match kind {
         "struct_item" | "struct_specifier" | "struct_declaration" => "struct".into(),
         "function_item" | "function_definition" | "function_declaration" | "method_declaration"
