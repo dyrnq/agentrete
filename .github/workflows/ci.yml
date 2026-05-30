@@ -34,6 +34,7 @@ jobs:
         run: cargo clippy --all-targets
 
   test:
+    needs: lint
     name: Test
     runs-on: ubuntu-24.04
     steps:
