@@ -336,242 +336,27 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
     }
 
     match cli.command {
-        Commands::Save {
-            content,
-            r#type,
-            tags,
-            files,
-            project,
-        } => {
-            let tags_vec = tags.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
-            let files_vec = files.map(|f| f.split(',').map(|s| s.trim().to_string()).collect());
-            let id = store
-                .save(types::NewMemory {
-                    content,
-                    memory_type: r#type,
-                    tags: tags_vec,
-                    files: files_vec,
-                    project,
-                    source_file: None,
-                })
-                .await?;
-            println!("Saved memory: {}", id);
+        Commands::Save { ref content, ref r#type, ref tags, ref files, ref project } => {
+            cli::memory::cmd_save(&store, content.clone(), r#type.clone(), tags.clone(), files.clone(), project.clone()).await?;
         }
-        Commands::Search {
-            query,
-            limit,
-            r#type,
-        } => {
-            let results = store.search(&query, limit, r#type.as_deref()).await?;
-            if results.is_empty() {
-                println!("No memories found.");
-            } else {
-                for m in &results {
-                    let types = m.memory_type.as_deref().unwrap_or("-");
-                    println!(
-                        "[{}] {} (score={:.2})  id={}",
-                        types, m.content, m.score, m.id
-                    );
-                    if let Some(ref tags) = m.tags {
-                        if !tags.is_empty() {
-                            println!("     tags: {}", tags.join(", "));
-                        }
-                    }
-                }
-            }
+        Commands::Search { ref query, limit, ref r#type } => {
+            cli::memory::cmd_search(&store, query.clone(), limit, r#type.clone()).await?;
         }
-        Commands::List { limit } => {
-            let entries = store.list(limit, None, 0).await?;
-            if entries.is_empty() {
-                println!("No memories.");
-            } else {
-                for m in &entries {
-                    let types = m.memory_type.as_deref().unwrap_or("-");
-                    println!("[{}] {}  id={}", types, m.content, m.id);
-                }
-            }
-        }
-        Commands::Stats => {
-            let stats = store.stats().await?;
-            println!("Memories:      {}", stats.memory_count);
-            println!("Sessions:      {}", stats.session_count);
-            println!("Observations:  {}", stats.observation_count);
-            println!("Database:      {}", stats.db_path);
-        }
-        Commands::Init => {
-            let stats = store.stats().await?;
-            println!("agentrete initialized successfully.");
-            println!("Database: {}", stats.db_path);
-            println!("Ready to save and search memories.");
-        }
-        Commands::Scan { path } => {
-            let root = path
-                .as_deref()
-                .map(std::path::Path::new)
-                .unwrap_or(std::path::Path::new("."));
-            println!("Scanning {} ...", root.display());
-            match store.scan_codebase(root).await {
-                Ok((syms, rels)) => println!("Done: {} symbols, {} relationships", syms, rels),
-                Err(e) => eprintln!("Scan failed: {}", e),
-            }
-        }
-        Commands::Doctor => {
-            let stats = store.stats().await?;
-            println!("agentrete diagnostics:");
-            println!("  Database:      {}", stats.db_path);
-            println!("  Memories:      {}", stats.memory_count);
-            println!("  Sessions:      {}", stats.session_count);
-            println!("  Observations:  {}", stats.observation_count);
-
-            // FTS check skipped (internal api)
-
-            // Check database file size
-            if let Ok(meta) = std::fs::metadata(&stats.db_path) {
-                let size_mb = meta.len() as f64 / 1_048_576.0;
-                println!("  DB file size:   {:.2} MB", size_mb);
-            }
-
-            println!(
-                "
-Status: ✅ agentrete is healthy"
-            );
-        }
-        Commands::InstallModel { .. } => unreachable!("handled before store open"),
-        Commands::Forget { id } => {
-            store.forget(&id).await?;
-            println!("Deleted: {}", id);
-        }
-        Commands::Wipe { force } => {
-            if force || ask_confirmation("Delete ALL memories?") {
-                store.wipe().await?;
-                println!("All memories deleted.");
-            } else {
-                println!("Cancelled.");
-            }
-        }
-        Commands::Seed => {
-            let rules = SEED_RULES;
-            let mut nc = 0u32;
-            let mut sc = 0u32;
-            for (content, mem_type, tags) in rules {
-                // Use LIKE for exact dedup (FTS5 treats colons/special chars as operators)
-                // Attempt save — if it already exists, we just add another (idempotent via content)
-                // TODO: add content+type UNIQUE index for proper dedup
-                let _existing: Vec<crate::types::SearchResult> = vec![];
-                if false {
-                    sc += 1;
-                    println!("  SKIP {}", &content[..content.len().min(60)]);
-                    continue;
-                }
-                let tags_vec = Some(tags.split(',').map(|s| s.trim().to_string()).collect());
-                store
-                    .save(crate::types::NewMemory {
-                        content: content.to_string(),
-                        memory_type: Some(mem_type.to_string()),
-                        tags: tags_vec,
-                        files: None,
-                        project: None,
-                        source_file: None,
-                    })
-                    .await?;
-                nc += 1;
-                let preview: String = content.chars().take(60).collect();
-                println!("  NEW  {preview}");
-            }
-            println!("Done: {nc} new, {sc} skipped.");
-        }
-        Commands::Daemon {
-            action,
-            port,
-            binary,
-        } => {
-            let bin = binary.unwrap_or_else(|| {
-                std::env::current_exe()
-                    .map(|p| p.to_string_lossy().into())
-                    .unwrap_or_else(|_| env!("CARGO_PKG_NAME").into())
-            });
-            cli::daemon::run(&action, port, &bin)?;
-        }
-        Commands::Setup => unreachable!(),
-        Commands::Mcp { port } => {
-            // Spawn embed worker only in HTTP mode (stdio instances share DB)
-            let is_http = port.is_some();
-            let store_for_shutdown = store.clone();
-            let embed_handle =
-                if is_http && cfg.embedding.backend != crate::config::EmbeddingBackend::None {
-                    let embedder = crate::embed::embeddings::Embedder::from_config(&cfg.embedding)?;
-                    let store2 = store.clone();
-                    let (model, dims) = match cfg.embedding.backend {
-                        crate::config::EmbeddingBackend::Remote => (
-                            cfg.embedding
-                                .remote
-                                .model
-                                .clone()
-                                .unwrap_or_else(|| "unknown".into()),
-                            cfg.embedding.remote.dims.unwrap_or(768) as usize,
-                        ),
-                        crate::config::EmbeddingBackend::Model2Vec => (
-                            format!(
-                                "model2vec:{}:{}d",
-                                cfg.embedding.model2vec.model, cfg.embedding.model2vec.dims
-                            ),
-                            cfg.embedding.model2vec.dims as usize,
-                        ),
-                        crate::config::EmbeddingBackend::None => (String::new(), 0),
-                    };
-                    Some(tokio::spawn(async move {
-                        log::info!("embed-worker: started (identifier={model}, dims={dims})");
-
-                        loop {
-                            match store2
-                                .embed_pending(&embedder, &model, dims, cfg.search.embed_batch)
-                                .await
-                            {
-                                Ok(0) => {
-                                    // No pending — sleep 5s
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(
-                                        cfg.search.embed_poll_secs,
-                                    ))
-                                    .await;
-                                }
-                                Ok(n) => {
-                                    log::info!("embed-worker: flushed {n} vectors");
-                                }
-                                Err(e) => {
-                                    log::info!("embed-worker: error flushing: {e}");
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(
-                                        cfg.search.embed_retry_secs,
-                                    ))
-                                    .await;
-                                }
-                            }
-                        }
-                    }))
-                } else {
-                    None
-                };
-
-            let result = match port {
-                Some(_p) => mcp::run_http(store, &cfg).await,
-                None => {
-                    log::info!(
-                        "agentrete: stdio mode (embed worker disabled, use HTTP for embeddings)"
-                    );
-                    mcp::run_stdio(store).await
-                }
-            };
-
-            // Abort embed worker on shutdown
-            if let Some(h) = embed_handle {
-                h.abort();
-            }
-            // Flush WAL + close pool before runtime drops
-            result?;
-            store_for_shutdown.shutdown().await;
+        Commands::List { limit } => { cli::memory::cmd_list(&store, limit).await?; }
+        Commands::Stats => { cli::memory::cmd_stats(&store).await?; }
+        Commands::Init => { cli::scan::cmd_init(&store).await?; }
+        Commands::Scan { ref path } => { cli::scan::cmd_scan(&store, path.clone().unwrap_or_default()).await?; }
+        Commands::Doctor => { cli::scan::cmd_doctor(&store).await?; }
+        Commands::Forget { ref id } => { cli::memory::cmd_forget(&store, id.clone()).await?; }
+        Commands::Wipe { force } => { cli::memory::cmd_wipe(&store, force).await?; }
+        Commands::Seed => { cli::seed::cmd_seed(&store).await?; }
+        Commands::Daemon { .. } | Commands::Setup | Commands::InstallModel { .. } | Commands::Mcp { .. } => {
+            unreachable!("handled before store open")
         }
     }
-
     Ok(())
+
+
 }
 
 fn ask_confirmation(prompt: &str) -> bool {
