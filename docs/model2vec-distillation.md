@@ -46,10 +46,10 @@ Accuracy:
 
 ```bash
 # Distill all 4 dimensions (downloads 2.2GB once, PCA is fast)
-cd /path/to/agentrete && uv run scripts/distill-bge-m3.py
+cd /path/to/agentrete && uv run scripts/distill-models.py bge-m3
 
 # Or pick specific dims
-uv run scripts/distill-bge-m3.py 512
+uv run scripts/distill-models.py bge-m3 512
 
 # Then configure agentrete
 cat >> ~/.agentrete/config.toml << TOML
@@ -75,9 +75,9 @@ The `[distill]` extra installs `sentence-transformers`, `torch`, `tokenizers`, a
 `scripts/distill-bge-m3.py` — multi-dimension distillation with progress logging.
 
 ```bash
-uv run scripts/distill-bge-m3.py          # all: 256 512 768 1024
-uv run scripts/distill-bge-m3.py 512      # single dim
-uv run scripts/distill-bge-m3.py 256 512  # specific dims
+uv run scripts/distill-models.py bge-m3          # all: 256 512 768 1024
+uv run scripts/distill-models.py bge-m3 512      # single dim
+uv run scripts/distill-models.py bge-m3 256 512  # specific dims
 ```
 
 Output: `~/.cache/model2vec/bge-m3-{dim}d/` for each dimension.
