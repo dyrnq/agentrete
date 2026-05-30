@@ -261,21 +261,6 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                         jsonrpc_err(&id, -32002, &format!("kg_query: unknown mode '{}' (try 'neighbors' or 'path')", mode))
                     }
                 }
-                "kg_triple_add" => {
-                    let subject = a["subject"].as_str().unwrap_or("");
-                    let predicate = a["predicate"].as_str().unwrap_or("");
-                    let object = a["object"].as_str().unwrap_or("");
-                    if subject.is_empty() || predicate.is_empty() || object.is_empty() {
-                        return jsonrpc_err(&id, -32002, "kg_triple_add requires subject, predicate, and object");
-                    }
-                    let confidence = a["confidence"].as_f64().unwrap_or(1.0) as f32;
-                    let source_memory_id = a["source_memory_id"].as_str().map(|s| s.to_string());
-                    let project = a["project"].as_str().map(|s| s.to_string());
-                    match store.add_triple(subject, predicate, object, confidence, source_memory_id, project).await {
-                        Ok(triple_id) => jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":format!("Triple added: {} --[{}]--> {} (id={})", subject, predicate, object, triple_id)}]})),
-                        Err(e) => jsonrpc_err(&id, -32000, &format!("Failed to add triple: {}", e)),
-                    }
-                }
                 "memory_stats" => match store.stats().await {
                     Ok(s) => {
                         let mut text = format!(
