@@ -11,17 +11,14 @@ pub struct Model2VecEmbed {
 
 impl Model2VecEmbed {
     pub fn new(cfg: &EmbeddingConfig) -> Result<Self> {
-        let path = cfg.model2vec.model2vec_path.as_deref().unwrap_or_else(|| {
-            // Default: look for distilled model alongside the source model name
-            // e.g. BAAI/bge-small-zh-v1.5 → ~/.agentrete/models/bge-small-zh-v1.5-m2v
-            let _model_name = cfg
-                .model2vec
-                .model
-                .rsplit('/')
-                .next()
-                .unwrap_or(&cfg.model2vec.model);
-            "/not/found/m2v"
-        });
+        let default_model_path = dirs::home_dir()
+            .unwrap_or_else(|| "/tmp".into())
+            .join(".cache/model2vec/bge-small-256d");
+        let path = cfg
+            .model2vec
+            .model2vec_path
+            .as_deref()
+            .unwrap_or(default_model_path.to_str().unwrap_or("/tmp/bge-small-256d"));
 
         let model = StaticModel::from_pretrained(path, None, None, None)
             .map_err(|e| anyhow::anyhow!("Failed to load model2vec model from {path}: {e}"))?;

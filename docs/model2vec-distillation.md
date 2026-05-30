@@ -165,3 +165,63 @@ All above are sentence-transformers compatible and can be distilled.
 - [model2vec-rs crate](https://crates.io/crates/model2vec-rs)
 - [MinishLab/model2vec on GitHub](https://github.com/MinishLab/model2vec)
 - [Compatible models on HuggingFace](https://huggingface.co/models?pipeline_tag=sentence-similarity&sort=downloads)
+
+
+## Distilled Models Summary
+
+Generated via `.dev/distill-models.py` (May 30, 2026). All models stored at `~/.cache/model2vec/{slug}-{dim}d/`.
+
+| Model | 256d | 512d | 768d | 1024d | 384d | Notes |
+|-------|------|------|------|-------|------|-------|
+| **bge-small** | 10MB ✅ | 20MB ✅ | — | — | — | Default model |
+| **bge-base** | 10MB ✅ | 20MB ✅ | 30MB ✅ | — | — | bge-small upgrade |
+| **bge-m3** | 122MB ✅ | 244MB ✅ | 366MB ✅ | 488MB ✅ | — | Flagship multilingual |
+| **m3e-small** | 10MB ✅ | 20MB ✅ | — | — | — | Chinese-optimized |
+| **m3e-base** | 10MB ✅ | 20MB ✅ | 30MB ✅ | — | — | Chinese-optimized |
+| **e5-multi** | 122MB ✅ | 244MB ✅ | 366MB ✅ | — | — | 94 languages |
+| **text2vec** | 10MB ✅ | 20MB ✅ | 30MB ✅ | — | — | MTEB-validated |
+| **minilm** | 122MB ✅ | — | — | — | 183MB ✅ | Smallest multilingual |
+| **gte-multi** | ❌ | ❌ | ❌ | — | — | model2vec tokenizer bug |
+
+### Known Issues
+
+| Model | Reason |
+|-------|--------|
+| Alibaba-NLP/gte-multilingual-base | model2vec `distill()` Skeletoken `index out of bounds`. `trust_remote_code=True` doesn't help. This is an upstream model2vec bug, not a model issue. |
+
+## Integration Test Results
+
+All models tested with 10 seeds (5 rules + 5 patterns), 3 queries each.
+Load + embed time is per-model startup including DB init.
+
+| Model | Size | EN→EN | ZH→EN | Verdict |
+|-------|------|-------|-------|---------|
+| **bge-m3** 1024d | 488MB | ✅✅✅ | ✅ | 🏆 Flagship |
+| **bge-m3** 512d | 244MB | ✅✅✅ | ✅ | ⭐ Best value |
+| **bge-m3** 256d | 131MB | ✅✅✅ | ✅ | |
+| **bge-base** 256-768d | 11-32MB | ✅✅✅ | ✅ | 🏆 Chinese |
+| **bge-small** 256-512d | 11-21MB | ✅✅✅ | ✅ | 🏆 Default model |
+| **m3e-base** 256-768d | 11-32MB | ✅✅✅ | ✅ | 🏆 Chinese |
+| **m3e-small** 256-512d | 11-21MB | ✅✅✅ | ✅ | |
+| **minilm** 256-384d | 131-192MB | ✅✅✅ | ✅ | ⚡ Smallest multilingual |
+| **e5-multi** 256-768d | 131-375MB | ✅✅✅ | ❌ | EN only, no Chinese |
+| **text2vec** 256-768d | 11-32MB | ✅✅✅ | ❌ | EN only, no Chinese |
+| **gte-multi** | — | — | — | ❌ model2vec bug |
+
+- **EN→EN (rule)**: "code modification apply_patch sed" → expected top result is rule type
+- **EN→EN (pattern)**: "database concurrent lock" → expected top result is pattern type
+- **ZH→EN**: "修改源代码用什么工具" → expected top result is rule type (cross-lingual)
+
+### Default Model
+
+`BAAI/bge-small-zh-v1.5` @ 256d (~10MB). Chosen for:
+- Smallest footprint among full-scoring models
+- Cross-lingual EN↔ZH support
+- Distilled model at `~/.cache/model2vec/bge-small-256d/`
+
+### Production Recommendation
+
+`BAAI/bge-m3` @ 512d (~244MB). Best trade-off:
+- 1024d → 512d via PCA retains strong accuracy
+- 100+ language support, all 3 test queries passed
+- Load time ~1.5s in release build
