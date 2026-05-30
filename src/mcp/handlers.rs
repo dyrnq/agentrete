@@ -1,5 +1,6 @@
 use crate::storage::Store;
 use serde_json::Value;
+use std::process::Command;
 
 use super::v2024;
 use super::v2025_06;
@@ -8,12 +9,30 @@ use super::v2025_11;
 pub(crate) fn tools_list() -> Value {
     serde_json::json!({"tools":[
         {"name":"memory_search","description":"Search","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"number"}},"required":["query"]}},
-        {"name":"memory_save","description":"Save with optional dry_run preview","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"type":{"type":"string"},"tags":{"type":"string"},"source_file":{"type":"string"},"dry_run":{"type":"boolean"}},"required":["content"]}},
+        {"name":"memory_save","description":"Save with optional dry_run preview, auto-detects project from git","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"type":{"type":"string"},"tags":{"type":"string"},"source_file":{"type":"string"},"project":{"type":"string"},"dry_run":{"type":"boolean"}},"required":["content"]}},
         {"name":"memory_list","description":"List memories, optionally filtered by type","inputSchema":{"type":"object","properties":{"limit":{"type":"number"},"type":{"type":"string"}},"required":[]}},
         {"name":"memory_forget","description":"Delete","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
         {"name":"memory_stats","description":"Stats","inputSchema":{"type":"object","properties":{},"required":[]}},
         {"name":"memory_compact","description":"Deduplicate memories (exact or semantic) and reclaim disk space","inputSchema":{"type":"object","properties":{"mode":{"type":"string"}},"required":[]}}
     ]})
+}
+
+/// Detect project name from git repo root, falling back to current directory.
+fn detect_project() -> Option<String> {
+    Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                let path = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                std::path::Path::new(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+            } else {
+                None
+            }
+        })
 }
 
 pub(crate) fn jsonrpc_ok(id: &Value, r: Value) -> Value {
@@ -77,7 +96,10 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                                 memory_type: mt,
                                 tags,
                                 files: None,
-                                project: None,
+                                project: a["project"]
+                                    .as_str()
+                                    .map(|s| s.to_string())
+                                    .or_else(detect_project),
                                 source_file: a["source_file"].as_str().map(|s| s.to_string()),
                             })
                             .await

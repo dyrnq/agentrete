@@ -76,3 +76,16 @@ mcp_post() {
         wget -qO- --header="Content-Type: application/json" --post-data="$json_body" "$url" 2>/dev/null
     fi
 }
+
+# ─── detect_project ──────────────────────────────────────────────────────────
+# Detects project name: git repo basename → current dir basename → "unknown"
+detect_project() {
+    if command -v git >/dev/null 2>&1; then
+        local repo
+        repo=$(git rev-parse --show-toplevel 2>/dev/null) && {
+            basename "$repo"
+            return
+        }
+    fi
+    basename "${PWD:-$(pwd)}" 2>/dev/null || echo "unknown"
+}
