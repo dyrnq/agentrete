@@ -115,4 +115,3 @@ Codex / Claude Code / Cursor / Zed / ...
 - [Agent Hooks Reference](docs/agent-hooks.md)
 - [Memory Decision Guide](docs/memory-decision.md)
 - [Memory Lifecycle](docs/memory-lifecycle.md)
-- [Architecture Overview](docs/architecture.md)

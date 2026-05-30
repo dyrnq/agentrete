@@ -97,10 +97,15 @@ hooks/
     ├── subagent-stop.ps1
     └── stop.ps1
 
-ext/
-├── vec0-linux-x86_64.so      sqlite-vec extension (embedded at compile time)
-└── vec0.so                   Generic fallback copy
+scripts/
+├── distill-models.py         Model2Vec distillation (9 models, multi-dim)
+├── download-sqlite-vec.py    Download sqlite-vec extensions for all platforms
+└── insert-10k.py             Insert 10k test memories for stress testing
 ```
+
+> **ext/** directory holds sqlite-vec loadable extensions (.so/.dylib/.dll),
+> downloaded by scripts/download-sqlite-vec.py, not tracked in git.
+> Compiled into binary via include_bytes! at build time.
 
 ## Search Architecture
 
@@ -221,17 +226,26 @@ No hooks fail due to missing runtime dependencies.
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| `sqlx` (sqlite, sqlite-load-extension) | 0.9 | Async SQLite with connection pool + extension loading |
-| `axum` | 0.8 | HTTP server (Streamable HTTP transport) |
-| `tokenizers` | 0.19 | HuggingFace tokenizer |
+| `sqlx` (sqlite, sqlite-load-extension) | 0.9.0 | Async SQLite with connection pool + extension loading |
+| `axum` | 0.8.9 | HTTP server (Streamable HTTP transport) |
+| `tokenizers` | 0.21 | HuggingFace tokenizer |
 | `model2vec-rs` | 0.2.1 | Static embedding model (distilled sentence-transformers) |
-| `hf-hub` | 0.5 | HuggingFace model download |
+| `hf-hub` | 0.5.0 | HuggingFace model download |
 | `reqwest` | 0.12 | HTTP client (install-model, remote embed) |
-| `tikv-jemallocator` | 0.7 | jemalloc global allocator |
-| `clap` | 4.x | CLI argument parsing |
-| `uuid` | 1.x | Memory ID generation |
-| `serde` / `serde_json` | 1.x | JSON + config serialization |
-| `tokio` | 1.x | Async runtime |
+| `rmcp` | 1.7.0 | MCP protocol framework (HTTP + stdio transports) |
+| `tikv-jemallocator` | 0.7.0 | jemalloc global allocator |
+| `sqlite-vec` | 0.1.9 | sqlite-vec loadable extension for KNN vector search |
+| `config` | 0.15 | TOML/YAML/JSON + env config loading |
+| `petgraph` | 0.8.3 | In-memory graph for knowledge graph traversal |
+| `notify` | 7.0.0 | File system watcher for auto codebase re-scan |
+| `clap` | 4.6 | CLI argument parsing |
+| `uuid` | 1.23 | Memory ID generation |
+| `serde` / `serde_json` | 1.0 | JSON + config serialization |
+| `tokio` | 1.52 | Async runtime |
+| `anyhow` | 1.0 | Error handling |
+| `thiserror` | 2.0 | Derive Error trait |
+| `chrono` | 0.4 | Timestamps |
+| `dirs` | 6.0 | System directories |
 
 ## Key Design Decisions
 
