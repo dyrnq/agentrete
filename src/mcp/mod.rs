@@ -4,6 +4,8 @@ mod v2024;
 mod v2025_06;
 mod v2025_11;
 
+pub mod tasks;
+
 mod handlers;
 mod protocol;
 mod transport_http;

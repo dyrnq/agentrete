@@ -79,6 +79,16 @@ even if you think they are outdated or low quality.
 Agentrete hooks capture tool-call outcomes automatically.
 You do NOT need to manually call `memory_save` after every tool use.
 Only save explicitly when the user asks or when a decision is made.
+
+## 8. KNOWLEDGE GRAPH (optional)
+
+If `knowledge_graph` is enabled in config, use `kg_scan` to scan a
+codebase and build a dependency/symbol graph. This requires `ast-grep`:
+
+    cargo install ast-grep
+
+Run `kg_scan path="." watch=true` to scan and watch for changes.
+Use `kg_query` to traverse the graph (neighbors, path).
 "#;
 
 #[cfg(test)]

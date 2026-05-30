@@ -253,6 +253,13 @@ fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    // Catch panics in spawned tasks so they don't abort the MCP server
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("[agentrete] PANIC (non-fatal): {}", info);
+        default_hook(info);
+    }));
+
     let cli = Cli::parse();
     // Extract MCP port if present (needed for Config before store init)
     let mcp_port = if let Commands::Mcp { port } = &cli.command {
@@ -315,6 +322,18 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
         None
     };
     let store = storage::Store::open(&cfg, embedder).await?;
+
+    // Warn if kg is enabled but ast-grep (sg) is not installed
+    if cfg.knowledge_graph.enabled
+        && std::process::Command::new("sg")
+            .arg("--version")
+            .output()
+            .is_err()
+    {
+        log::warn!(
+            "knowledge_graph is enabled but ast-grep (sg) not found. Run: cargo install ast-grep"
+        );
+    }
 
     match cli.command {
         Commands::Save {
@@ -386,7 +405,10 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
             println!("Ready to save and search memories.");
         }
         Commands::Scan { path } => {
-            let root = path.as_deref().map(std::path::Path::new).unwrap_or(std::path::Path::new("."));
+            let root = path
+                .as_deref()
+                .map(std::path::Path::new)
+                .unwrap_or(std::path::Path::new("."));
             println!("Scanning {} ...", root.display());
             match store.scan_codebase(root).await {
                 Ok((syms, rels)) => println!("Done: {} symbols, {} relationships", syms, rels),

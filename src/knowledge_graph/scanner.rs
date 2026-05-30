@@ -29,27 +29,130 @@ pub struct Relation {
 
 /// Language config: (sg_language_name, [ast_kinds], import_kind)
 const LANGUAGES: &[(&str, &[&str], &[&str])] = &[
-    ("rust", &["struct_item", "function_item", "enum_item", "trait_item", "type_item", "impl_item", "const_item"], &["use_declaration"]),
-    ("python", &["class_definition", "function_definition"], &["import_statement", "import_from_statement"]),
-    ("typescript", &["class_declaration", "interface_declaration", "function_declaration", "enum_declaration", "type_alias_declaration"], &["import_statement"]),
-    ("javascript", &["class_declaration", "function_declaration"], &["import_statement"]),
-    ("java", &["class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "method_declaration"], &["import_declaration"]),
-    ("go", &["function_declaration", "method_declaration", "type_spec"], &["import_declaration"]),
+    (
+        "rust",
+        &[
+            "struct_item",
+            "function_item",
+            "enum_item",
+            "trait_item",
+            "type_item",
+            "impl_item",
+            "const_item",
+        ],
+        &["use_declaration"],
+    ),
+    (
+        "python",
+        &["class_definition", "function_definition"],
+        &["import_statement", "import_from_statement"],
+    ),
+    (
+        "typescript",
+        &[
+            "class_declaration",
+            "interface_declaration",
+            "function_declaration",
+            "enum_declaration",
+            "type_alias_declaration",
+        ],
+        &["import_statement"],
+    ),
+    (
+        "javascript",
+        &["class_declaration", "function_declaration"],
+        &["import_statement"],
+    ),
+    (
+        "java",
+        &[
+            "class_declaration",
+            "interface_declaration",
+            "enum_declaration",
+            "record_declaration",
+            "method_declaration",
+        ],
+        &["import_declaration"],
+    ),
+    (
+        "go",
+        &["function_declaration", "method_declaration", "type_spec"],
+        &["import_declaration"],
+    ),
     ("ruby", &["class", "module", "method"], &[]),
-    ("php", &["class_declaration", "function_definition", "interface_declaration"], &[]),
-    ("swift", &["class_declaration", "struct_declaration", "enum_declaration", "protocol_declaration", "function_declaration"], &[]),
-    ("kotlin", &["class_declaration", "function_declaration", "interface_declaration"], &[]),
+    (
+        "php",
+        &[
+            "class_declaration",
+            "function_definition",
+            "interface_declaration",
+        ],
+        &[],
+    ),
+    (
+        "swift",
+        &[
+            "class_declaration",
+            "struct_declaration",
+            "enum_declaration",
+            "protocol_declaration",
+            "function_declaration",
+        ],
+        &[],
+    ),
+    (
+        "kotlin",
+        &[
+            "class_declaration",
+            "function_declaration",
+            "interface_declaration",
+        ],
+        &[],
+    ),
     ("c", &["function_definition", "struct_specifier"], &[]),
-    ("cpp", &["function_definition", "class_specifier", "struct_specifier"], &[]),
-    ("c-sharp", &["class_declaration", "interface_declaration", "method_declaration"], &[]),
-    ("scala", &["class_definition", "object_definition", "trait_definition", "function_definition"], &[]),
-    ("objc", &["interface_declaration", "implementation_declaration", "method_definition"], &[]),
+    (
+        "cpp",
+        &["function_definition", "class_specifier", "struct_specifier"],
+        &[],
+    ),
+    (
+        "c-sharp",
+        &[
+            "class_declaration",
+            "interface_declaration",
+            "method_declaration",
+        ],
+        &[],
+    ),
+    (
+        "scala",
+        &[
+            "class_definition",
+            "object_definition",
+            "trait_definition",
+            "function_definition",
+        ],
+        &[],
+    ),
+    (
+        "objc",
+        &[
+            "interface_declaration",
+            "implementation_declaration",
+            "method_definition",
+        ],
+        &[],
+    ),
     ("bash", &["function_definition"], &[]),
 ];
 
 /// Scan specific files using ast-grep CLI. Only processes the given files.
+#[allow(dead_code)]
 pub fn scan_files(files: &[std::path::PathBuf]) -> Result<(Vec<Symbol>, Vec<Relation>)> {
-    let root = files.first().map(|f| f.parent().unwrap_or(Path::new("."))).unwrap_or(Path::new("."));
+    let root = files
+        .first()
+        .map(|f| f.parent().unwrap_or(Path::new(".")))
+        .unwrap_or(Path::new("."));
     scan_directory_inner(root, Some(files))
 }
 
@@ -58,7 +161,10 @@ pub fn scan_directory(root: &Path) -> Result<(Vec<Symbol>, Vec<Relation>)> {
     scan_directory_inner(root, None)
 }
 
-fn scan_directory_inner(root: &Path, filtered_files: Option<&[std::path::PathBuf]>) -> Result<(Vec<Symbol>, Vec<Relation>)> {
+fn scan_directory_inner(
+    root: &Path,
+    _filtered_files: Option<&[std::path::PathBuf]>,
+) -> Result<(Vec<Symbol>, Vec<Relation>)> {
     // Check sg is available
     let sg_check = Command::new("sg").arg("--version").output();
     if sg_check.is_err() {
@@ -167,7 +273,9 @@ fn scan_directory_inner(root: &Path, filtered_files: Option<&[std::path::PathBuf
                             if !import_name.is_empty() {
                                 // Dedup imports from same file
                                 let dup = all_relations.iter().any(|r| {
-                                    r.source == file_node && r.target == import_name && r.relation == "imports"
+                                    r.source == file_node
+                                        && r.target == import_name
+                                        && r.relation == "imports"
                                 });
                                 if !dup {
                                     all_relations.push(Relation {
@@ -188,7 +296,8 @@ fn scan_directory_inner(root: &Path, filtered_files: Option<&[std::path::PathBuf
     let md_files = collect_md_files(root);
     for file_path in &md_files {
         let source = std::fs::read_to_string(file_path).unwrap_or_default();
-        let file_stem = file_path.file_stem()
+        let file_stem = file_path
+            .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         let file_node = format!("file:{}", file_stem);
@@ -227,17 +336,52 @@ fn scan_directory_inner(root: &Path, filtered_files: Option<&[std::path::PathBuf
 pub fn extract_name(text: &str) -> String {
     let text = text.trim();
     let keywords = [
-        "pub", "async", "unsafe", "extern", "fn", "struct", "enum", "trait",
-        "impl", "type", "const", "static", "module", "class", "def",
-        "interface", "abstract", "sealed", "open", "data", "case",
-        "object", "record", "protocol", "extension", "where", "for",
-        "public", "private", "protected", "internal", "override",
-        "virtual", "inline", "export", "declare", "mut", "ref", "let",
+        "pub",
+        "async",
+        "unsafe",
+        "extern",
+        "fn",
+        "struct",
+        "enum",
+        "trait",
+        "impl",
+        "type",
+        "const",
+        "static",
+        "module",
+        "class",
+        "def",
+        "interface",
+        "abstract",
+        "sealed",
+        "open",
+        "data",
+        "case",
+        "object",
+        "record",
+        "protocol",
+        "extension",
+        "where",
+        "for",
+        "public",
+        "private",
+        "protected",
+        "internal",
+        "override",
+        "virtual",
+        "inline",
+        "export",
+        "declare",
+        "mut",
+        "ref",
+        "let",
     ];
     let tokens: Vec<&str> = text.split_whitespace().collect();
     for token in &tokens {
         // Extract alphanumeric + underscore prefix (drop generics, parens, etc.)
-        let clean: String = token.trim().chars()
+        let clean: String = token
+            .trim()
+            .chars()
             .skip_while(|c| *c == '(' || *c == '<' || *c == '\'')
             .take_while(|c| c.is_alphanumeric() || *c == '_')
             .collect();
@@ -247,10 +391,20 @@ pub fn extract_name(text: &str) -> String {
         return clean;
     }
     // Fallback: look for identifier after keyword patterns
-    let triggers = ["fn ", "struct ", "enum ", "trait ", "class ", "def ", "interface ", "type "];
+    let triggers = [
+        "fn ",
+        "struct ",
+        "enum ",
+        "trait ",
+        "class ",
+        "def ",
+        "interface ",
+        "type ",
+    ];
     for t in &triggers {
         if let Some(rest) = text.split_once(t).map(|(_, r)| r.trim()) {
-            let name: String = rest.chars()
+            let name: String = rest
+                .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '!' || *c == '?')
                 .collect();
             if !name.is_empty() && !keywords.contains(&name.as_str()) {
@@ -261,26 +415,32 @@ pub fn extract_name(text: &str) -> String {
     text.to_string()
 }
 
-
-
 pub fn extract_import_target(text: &str, lang: &str) -> String {
     match lang {
-        "rust" => text.strip_prefix("use ")
+        "rust" => text
+            .strip_prefix("use ")
             .and_then(|s| s.split("::").next())
-            .unwrap_or("").to_string(),
-        "python" => text.strip_prefix("import ")
+            .unwrap_or("")
+            .to_string(),
+        "python" => text
+            .strip_prefix("import ")
             .or_else(|| text.strip_prefix("from "))
             .and_then(|s| s.split_whitespace().next())
             .and_then(|s| s.split('.').next())
-            .unwrap_or("").to_string(),
-        "java" => text.strip_prefix("import ")
+            .unwrap_or("")
+            .to_string(),
+        "java" => text
+            .strip_prefix("import ")
             .and_then(|s| s.split('.').next())
-            .unwrap_or("").to_string(),
+            .unwrap_or("")
+            .to_string(),
         "typescript" | "javascript" => text
-            .split('\'').nth(1)
+            .split('\'')
+            .nth(1)
             .or_else(|| text.split('"').nth(1))
             .and_then(|s| s.split('/').next())
-            .unwrap_or("").to_string(),
+            .unwrap_or("")
+            .to_string(),
         "go" => text.split('"').nth(1).unwrap_or("").to_string(),
         _ => String::new(),
     }
@@ -289,8 +449,12 @@ pub fn extract_import_target(text: &str, lang: &str) -> String {
 pub fn kind_to_symbol_kind(kind: &str) -> String {
     match kind {
         "struct_item" | "struct_specifier" | "struct_declaration" => "struct".into(),
-        "function_item" | "function_definition" | "function_declaration" | "method_declaration"
-        | "method_definition" | "arrow_function" => "function".into(),
+        "function_item"
+        | "function_definition"
+        | "function_declaration"
+        | "method_declaration"
+        | "method_definition"
+        | "arrow_function" => "function".into(),
         "enum_item" | "enum_declaration" => "enum".into(),
         "trait_item" | "trait_definition" => "trait".into(),
         "impl_item" => "impl".into(),
@@ -307,7 +471,9 @@ pub fn kind_to_symbol_kind(kind: &str) -> String {
 
 fn collect_md_files(root: &Path) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
-    if !root.is_dir() { return files; }
+    if !root.is_dir() {
+        return files;
+    }
     let mut dirs = vec![root.to_path_buf()];
     while let Some(dir) = dirs.pop() {
         if let Ok(entries) = std::fs::read_dir(&dir) {

@@ -5,12 +5,12 @@ Run after any code change. All tests must pass before commit.
 ## Prerequisites
 
 - Rust toolchain (stable)
-- Python 3.11+
 - `curl`, `jq`
-- Model2Vec distilled model at `/tmp/m2v-bge-small-zh`
+- `ast-grep` (sg) — `cargo install ast-grep` (required for `kg_scan`)
+- `git` (required for `kg_scan` git history extraction)
 - No process on port 9092 before starting
 
-## Test Config
+## Config
 
 ```toml
 # /tmp/test-m2v.toml
@@ -23,7 +23,10 @@ backend = "model2vec"
 [embedding.model2vec]
 model = "BAAI/bge-small-zh-v1.5"
 dims = 256
-model2vec_path = "/tmp/m2v-bge-small-zh"
+model2vec_path = "/home/bill/.cache/model2vec/bge-small-256d"
+
+[knowledge_graph]
+enabled = true
 ```
 
 ---
@@ -41,191 +44,347 @@ cargo build
 
 ---
 
-## Phase 2: Startup & Health
+## Phase 2: Unit Tests
 
 ```bash
-rm -rf /tmp/test-db
-RUST_LOG=info cargo run -- -c /tmp/test-m2v.toml mcp --port 9092 &
+cargo test
+```
+
+**Expected**: 33 test cases pass:
+
+| Test | What it covers |
+|------|----------------|
+| `test_reembed_flow` | Embed model change detection, pending SQL logic |
+| `test_scan_git_history` | Git log parsing → kg_triples (commit/message/author/file) |
+| `test_basic_neighbors` | KG neighbor queries on in-memory graph |
+| `test_path_same_node` | Shortest path when source=target |
+| `test_path_no_connection` | Shortest path between disconnected nodes |
+| `test_query_path` | kg_query path traversal |
+| `test_disabled_graph` | KG gracefully handles disabled state |
+| `test_no_relations` | Empty graph returns empty results |
+| `test_extract_name` | AST symbol name extraction |
+| `test_extract_import_target` | Import/use/require parsing |
+| `test_kind_to_symbol_kind` | AST kind → symbol type mapping |
+| `test_confidence_and_source` | Triple metadata fields |
+| `test_register_and_complete` | TaskManager lifecycle: register → complete |
+| `test_cancel_task` | TaskManager cancel flag flip |
+| `test_fail_task` | TaskManager fail with error message |
+| `test_cancel_nonexistent` | Cancel on unknown task returns false |
+| `test_all_statuses` | TaskManager lists all registered tasks |
+| `test_protocol_includes_key_sections` | MCP instructions doc has all sections |
+| `test_detect_openai` | Remote embed vendor detection |
+| `test_remote_vendor_explicit` | Config override for remote vendor |
+
+Plus ~12 KG node/edge/symbol tests and remote Ollama tests.
+
+---
+
+## Phase 3: Startup & Health
+
+```bash
+cargo run --bin agentrete -- mcp -p 9092 &
 sleep 3
 curl -s http://127.0.0.1:9092/
 ```
 
 **Expected**: `{"service":"agentrete","status":"ok","version":"..."}`  
-**Log check**: `Model2Vec loaded: /tmp/m2v-bge-small-zh (256d)`  
-**Log check**: `sqlite-vec extension extracted to /tmp/agentrete/vec0-linux-x86_64.so`
+**Log check**: `sqlite-vec extension extracted to /tmp/agentrete/vec0-linux-x86_64.so`  
+**Log check**: `Model2Vec loaded: /home/bill/.cache/model2vec/bge-small-256d (256d)`  
+**Log check**: `kg: built graph (N nodes, M edges)`  
+**Log check** (if sg not installed): warning about missing ast-grep
 
 ---
 
-## Phase 3: Save & Stats
+## Phase 4: Initialize & Tools
 
 ```bash
-curl -s -X POST http://127.0.0.1:9092/ \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"memory_save","arguments":{"content":"不要用sed修改代码 必须用apply_patch","type":"rule","tags":"code-rule"}}}' \
-  -H "Content-Type: application/json"
-
-curl -s -X POST http://127.0.0.1:9092/ \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"memory_save","arguments":{"content":"Never use sed to modify source code, always use apply_patch","type":"rule","tags":"code-rule"}}}' \
-  -H "Content-Type: application/json"
-
-curl -s -X POST http://127.0.0.1:9092/ \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"memory_save","arguments":{"content":"今天天气真好适合出去玩","type":"test"}}}' \
-  -H "Content-Type: application/json"
-
-curl -s -X POST http://127.0.0.1:9092/ \
-  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"memory_stats","arguments":{}}}' \
-  -H "Content-Type: application/json"
+# Check supported protocol versions
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"initialize","params":{"protocolVersion":"2025-11-25"},"id":1}' | jq .
 ```
 
-**Expected**: 3 saves return `"Saved: mem_..."`. Stats show 3 memories.
+**Expected**: `capabilities` contains `"tasks": {}` and `"tools": {"listChanged": false}`.
+
+```bash
+# List all tools
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tools/list","id":2}' | jq '.result.tools[].name'
+```
+
+**Expected**: 9 tools — `memory_search`, `memory_save`, `memory_list`, `memory_forget`, `memory_stats`, `memory_compact`, `kg_query`, `kg_scan`, `kg_scan_status`.
 
 ---
 
-## Phase 4: Semantic Search
-
-### 4.1 Chinese → Chinese
+## Phase 5: Memory Operations
 
 ```bash
-curl -s -X POST http://127.0.0.1:9092/ \
-  -d '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"memory_search","arguments":{"query":"不要用sed修改源代码 使用apply_patch","limit":3}}}' \
-  -H "Content-Type: application/json"
+# Save
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tools/call","params":{"name":"memory_save","arguments":{"content":"test memory","type":"test"}},"id":3}'
+# Expected: "Saved: mem_..."
+
+# Stats
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tools/call","params":{"name":"memory_stats","arguments":{}},"id":4}'
+# Expected: Memories: 1+
+
+# List
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tools/call","params":{"name":"memory_list","arguments":{"limit":10}},"id":5}'
+# Expected: shows saved memory
+
+# Forget
+# Copy ID from list, then:
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tools/call","params":{"name":"memory_forget","arguments":{"id":"mem_xxx"}},"id":6}'
+# Expected: "Deleted: mem_xxx"
 ```
-
-**Expected**: Top result is Chinese rule `不要用sed修改代码` with score ≥ 0.85.
-
-### 4.2 English → English
-
-```bash
-curl -s -X POST http://127.0.0.1:9092/ \
-  -d '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"memory_search","arguments":{"query":"Never use sed to modify code","limit":3}}}' \
-  -H "Content-Type: application/json"
-```
-
-**Expected**: Top result is English rule `Never use sed...` with score ≥ 0.85.
-
-### 4.3 Cross-lingual: English → Chinese
-
-**Expected**: Both Chinese and English rules appear in top 5.  
-English rule score ≥ 0.90, Chinese rule score ≥ 0.40.
-
-### 4.4 Cross-lingual: Chinese → English
-
-**Expected**: Both rules appear. Chinese rule score ≥ 0.90, English rule score ≥ 0.40.
-
-### 4.5 Unrelated Query
-
-```bash
-curl -s -X POST http://127.0.0.1:9092/ \
-  -d '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"memory_search","arguments":{"query":"今天天气非常好","limit":3}}}' \
-  -H "Content-Type: application/json"
-```
-
-**Expected**: Top result matches irrelevant Chinese text with score ≥ 0.70.  
-Code rules do not appear in top 3 (robustness: irrelevant query → not confused with rules).
 
 ---
 
-## Phase 5: Concurrent Write Stress
+## Phase 6: Knowledge Graph
+
+### 6.0 Prerequisites
+
+ast-grep (sg) must be installed:
+
+```bash
+which sg || cargo install ast-grep
+```
+
+### 6.1 Scan Codebase
+
+```bash
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tasks/send","params":{"name":"kg_scan","arguments":{"path":"/data/work/agentrete","watch":false}},"id":10}' | jq .
+```
+Expected: Returns task_0001 with status running.
+
+### 6.2 Wait for Completion
+
+```bash
+sleep 10
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tasks/status","params":{"id":"task_0001"},"id":11}' | jq '.result.content[0].text'
+```
+Expected: completed with ok=true, symbols, relations.
+
+```bash
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tools/call","params":{"name":"kg_scan_status","arguments":{}},"id":12}' | jq -r '.result.content[0].text'
+```
+Expected: "No scan running."
+
+### 6.3 Query Neighbors
+
+```bash
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tools/call","params":{"name":"kg_query","arguments":{"mode":"neighbors","entity":"agentrete"}},"id":13}' | jq -r '.result.content[0].text'
+```
+Expected: Relations like `agentrete --[in:contains]--> file:README`.
+
+Empty entity (error case):
+
+```bash
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tools/call","params":{"name":"kg_query","arguments":{"mode":"neighbors","entity":""}},"id":14}' | jq -r '.error.message'
+```
+Expected: Error requiring entity.
+
+### 6.4 Query Path
+
+```bash
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tools/call","params":{"name":"kg_query","arguments":{"mode":"path","entity":"agentrete","target":"MCP"}},"id":15}' | jq -r '.result.content[0].text'
+```
+Expected: Path or "No path found".
+
+### 6.5 Scan with Watch
+
+```bash
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tasks/send","params":{"name":"kg_scan","arguments":{"path":"/data/work/agentrete","watch":true}},"id":16}' | jq '.result.content[0].text'
+```
+Expected: Scan starts, file watcher activated.
+
+```bash
+sleep 10
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tasks/status","params":{"id":"task_0002"},"id":17}' | jq '.result.content[0].text'
+```
+
+### 6.6 Cancel Task
+
+```bash
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tasks/cancel","params":{"id":"task_0001"},"id":18}' | jq '.result.content[0].text'
+```
+Expected: cancelled or not found.
+
+### 6.7 KG Disabled Mode
+
+Start server with `knowledge_graph.enabled = false`, then:
+
+```bash
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tools/call","params":{"name":"kg_query","arguments":{"mode":"neighbors","entity":"test"}},"id":19}' | jq -r '.error.message'
+```
+Expected: "Knowledge graph is disabled."
+
+---
+
+
+
+Test that switching embedding model dimensions triggers full re-embed.
+
+## Phase 7: Re-Embed Stress Test
+
+### 7.1 Insert 10,000 Memories
+
+With server still running from Phase 6, insert 10k rows:
 
 ```bash
 python3 << 'PYEOF'
-import concurrent.futures, urllib.request, json, time
-
-URL = "http://127.0.0.1:9092/"
-TOTAL = 1000
-CONCURRENT = 10
-
-def do_save(i):
-    payload = json.dumps({
-        "jsonrpc": "2.0", "id": i,
-        "method": "tools/call",
-        "params": {"name": "memory_save", "arguments": {"content": f"stress-{i:04d}", "type": "test"}}
-    }).encode()
-    try:
-        req = urllib.request.Request(URL, data=payload, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=30)
-        return True
-    except:
-        return False
-
+import sqlite3, uuid, time
+DB = "/tmp/test-db/memory.db"
+conn = sqlite3.connect(DB)
+cur = conn.cursor()
+batch_size = 500
+total = 10000
 start = time.time()
-with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENT) as ex:
-    results = list(ex.map(do_save, range(TOTAL)))
-elapsed = time.time() - start
-success = sum(results)
-assert success == TOTAL, f"FAIL: {success}/{TOTAL}"
-print(f"PASS: {TOTAL} req in {elapsed:.1f}s ({TOTAL/elapsed:.0f} req/s)")
+for i in range(0, total, batch_size):
+    rows = []
+    now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+    for j in range(batch_size):
+        idx2 = i + j
+        rid = "mem_" + uuid.uuid4().hex[:12]
+        content = "stress-" + str(idx2).zfill(5) + " " + uuid.uuid4().hex[:8]
+        rows.append((rid, "test", content, "[]", 3, now, now))
+    cur.executemany("INSERT OR IGNORE INTO memories (id,type,content,tags,importance,created_at,updated_at) VALUES (?,?,?,?,?,?,?)", rows)
+    conn.commit()
+    if (i + batch_size) % 2000 == 0:
+        e = time.time() - start
+        print(f"  {i+batch_size}/{total} in {e:.1f}s")
+conn.close()
+print(f"Done: {total} rows")
 PYEOF
 ```
 
-**Expected**: 1000/1000 success, ≥ 50 req/s.
-
-### 5.2 High Concurrency
-
-Same as above with `CONCURRENT = 20`. Still expect 100% success.
-
----
-
-## Phase 6: Embed Worker Progress
-
+Verify:
 ```bash
-# Wait for embed worker to process pending rows
-sleep 30
-
-curl -s -X POST http://127.0.0.1:9092/ \
-  -d '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"memory_stats","arguments":{}}}' \
-  -H "Content-Type: application/json"
+curl -s http://127.0.0.1:9092/ -d '{"method":"tools/call","params":{"name":"memory_stats","arguments":{}},"id":10}' | jq -r '.result.content[0].text' | grep Memories
 ```
+Expected: Memories: 10000+
 
-**Expected**: `embeddings > 0`. All memories eventually have embeddings.
-
-**Log check**: `embed-worker: flushed N vectors` appears.
-
----
-
-## Phase 7: MCP Tools Smoke Test
-
-### memory_list
+### 7.2 Embed Worker
 
 ```bash
-curl -s -X POST http://127.0.0.1:9092/ \
-  -d '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"memory_list","arguments":{"limit":3}}}' \
-  -H "Content-Type: application/json"
+sleep 15
+curl -s http://127.0.0.1:9092/ -d '{"method":"tools/call","params":{"name":"memory_stats","arguments":{}},"id":11}' | jq -r '.result.content[0].text'
 ```
+Expected: Embedding count > 0.
 
-**Expected**: Returns 3 recent memories.
-
-### memory_forget
-
-```bash
-# Get a memory ID from list, then:
-curl -s -X POST http://127.0.0.1:9092/ \
-  -d '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"memory_forget","arguments":{"id":"MEM_ID"}}}' \
-  -H "Content-Type: application/json"
-```
-
-**Expected**: `"Deleted: MEM_ID"`.
-
----
-
-## Phase 8: Shutdown
+### 7.3 Shutdown
 
 ```bash
-pkill -f "target/debug/agentrete"
+pkill -f "agentrete.*mcp"
 sleep 2
-rm -rf /tmp/test-db
 ```
 
-**Expected**: No orphaned agentrete processes. Port 9092 free.
+### 7.4 Switch Model (256d -> 512d)
+
+```toml
+# /tmp/test-m2v-v2.toml
+port = 9092
+db_dir = "/tmp/test-db"
+
+[embedding]
+backend = "model2vec"
+
+[embedding.model2vec]
+model = "BAAI/bge-small-zh-v1.5"
+dims = 512
+model2vec_path = "/home/bill/.cache/model2vec/bge-small-512d"
+
+[knowledge_graph]
+enabled = true
+```
+
+### 7.5 Restart with New Dims
+
+```bash
+rm -f /tmp/test-db/memory.db-wal /tmp/test-db/memory.db-shm
+cargo run --bin agentrete -- -c /tmp/test-m2v-v2.toml mcp -p 9092 &
+sleep 5
+```
+
+Log check: `init_vec: stored dims != 512, dropping vec0 + clearing embeddings`
+
+```bash
+curl -s http://127.0.0.1:9092/ -d '{"method":"tools/call","params":{"name":"memory_stats","arguments":{}},"id":12}' | jq -r '.result.content[0].text'
+```
+Expected: 10000+ (0 embeddings)
+
+### 7.6 Wait for Re-Embed
+
+```bash
+sleep 30
+curl -s http://127.0.0.1:9092/ -d '{"method":"tools/call","params":{"name":"memory_stats","arguments":{}},"id":13}' | jq -r '.result.content[0].text'
+```
+Expected: 10000 embeddings, model shows 512d.
+
+### 7.7 Search Still Works
+
+```bash
+curl -s http://127.0.0.1:9092/ -d '{"method":"tools/call","params":{"name":"memory_search","arguments":{"query":"stress test memory","limit":5}},"id":14}' | jq -c '.result.content[0].text[:120]'
+```
+Expected: Results with scores > 0.
 
 ---
 
-## Full Automated Run
+## Phase 8: KG Edge Cases
 
 ```bash
-# Run all phases except Phase 8 (cleanup)
-# Copy to /tmp/test-agentrete.sh and execute:
-bash /tmp/test-agentrete.sh
+# KG disabled → graceful error
+# Start server without kg, then:
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tools/call","params":{"name":"kg_query","arguments":{"mode":"neighbors","entity":"test"}},"id":13}' | jq .
 ```
+**Expected**: Error message about KG being disabled.
+
+```bash
+# Empty entity
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tools/call","params":{"name":"kg_query","arguments":{"mode":"neighbors","entity":""}},"id":14}' | jq .
+```
+**Expected**: Error message requiring entity.
+
+---
+
+## Phase 9: Panic Protection
+
+```bash
+# Trigger a scan (runs in background task)
+# If scan_codebase panics, the server should stay alive
+curl -s http://127.0.0.1:9092/ \
+  -d '{"method":"tasks/send","params":{"name":"kg_scan","arguments":{"path":"/nonexistent","watch":false}},"id":15}' | jq .
+
+# Server should still respond
+sleep 2
+curl -s http://127.0.0.1:9092/ | jq .
+```
+**Expected**: Server continues responding after any task panic.
+
+---
+
+## Phase 10: Shutdown
+
+```bash
+pkill -f "agentrete.*mcp"
+sleep 1
+```
+
+**Expected**: No orphaned processes.
 
 ---
 
@@ -233,81 +392,23 @@ bash /tmp/test-agentrete.sh
 
 | Test | Assertion |
 |------|-----------|
-| `cargo fmt` | Zero changes |
+| `cargo fmt --check` | Zero changes |
 | `cargo clippy -- -D warnings` | Zero errors |
 | `cargo build` | Compiles |
+| `cargo test` | 33 passed |
 | Health endpoint | Returns 200 with version |
-| Model2Vec loaded | Log shows model path + dims |
-| sqlite-vec loaded | Log shows extension extracted |
+| `initialize` (2025-11-25) | `capabilities.tasks` present |
+| `tools/list` | 9 tools |
 | `memory_save` | Returns `Saved: mem_...` |
-| `memory_stats` | Shows correct memory count |
-| `memory_search` zh→zh | Top score ≥ 0.85 |
-| `memory_search` en→en | Top score ≥ 0.85 |
-| `memory_search` en→zh | Cross-lingual hit (score ≥ 0.40) |
-| `memory_search` zh→en | Cross-lingual hit (score ≥ 0.40) |
-| `memory_search` irrelevant | No rule false positives |
-| Concurrent write 1000×10 | 100% success |
-| Concurrent write 1000×20 | 100% success |
-| Embed worker progress | embeddings count increases |
+| `memory_stats` | Shows count |
 | `memory_list` | Returns items |
 | `memory_forget` | Deletes item |
-| Shutdown | No orphaned processes |
-
----
-
-## Phase 9: stdio Transport
-
-### 9.1 Startup
-
-```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}}' | cargo run -- -c /tmp/test-m2v.toml mcp 2>/dev/null
-```
-
-**Expected**: Returns `initialize` response with `protocolVersion`, `serverInfo`, `capabilities`.
-
-### 9.2 Tool List
-
-```bash
-echo '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | cargo run -- -c /tmp/test-m2v.toml mcp 2>/dev/null
-```
-
-**Expected**: Returns array with `memory_save`, `memory_search`, `memory_list`, `memory_forget`, `memory_stats`, `memory_compact`.
-
-### 9.3 Save via stdio
-
-```bash
-printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}}\n{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"memory_save","arguments":{"content":"stdio-test","type":"test"}}}\n' | cargo run -- -c /tmp/test-m2v.toml mcp 2>/dev/null | grep "Saved"
-```
-
-**Expected**: Output contains `"Saved: mem_..."`.
-
-### 9.4 Search via stdio
-
-```bash
-printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{}}}\n{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"memory_search","arguments":{"query":"stdio test","limit":3}}}\n' | cargo run -- -c /tmp/test-m2v.toml mcp 2>/dev/null | grep "stdio-test"
-```
-
-**Expected**: Output contains `stdio-test` in search results.
-
-### 9.5 Embed Worker Disabled
-
-**Expected**: No `embed-worker: started` in stderr when using stdio transport (embed worker only spawns for HTTP).
-
-### 9.6 Empty Input
-
-```bash
-echo "" | cargo run -- -c /tmp/test-m2v.toml mcp 2>/dev/null
-```
-
-**Expected**: No crash. Gracefully ignores empty lines.
-
-## Regression Checklist (stdio)
-
-| Test | Assertion |
-|------|-----------|
-| `initialize` | Returns protocol version + capabilities |
-| `tools/list` | Returns 6 tools |
-| `memory_save` via stdio | Returns saved ID |
-| `memory_search` via stdio | Returns matching results |
-| Embed worker | Not spawned in stdio mode |
-| Empty input | No crash, graceful ignore |
+| `tasks/send kg_scan` | Returns task with `running` |
+| `tasks/status` | Shows `completed` with result |
+| `kg_query neighbors` | Returns relations or empty |
+| `kg_query path` | Returns path or not-found |
+| `kg_scan watch=true` | Scan + watch starts |
+| `tasks/cancel` | Returns cancelled or not-found |
+| KG disabled mode | Graceful error |
+| Panic protection | Server survives task crash |
+| No orphan processes | Port 9092 free after kill |

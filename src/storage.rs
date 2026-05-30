@@ -33,6 +33,7 @@ pub struct Store {
     pub(crate) scan_running: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) watch_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub(crate) scan_result: Arc<std::sync::Mutex<Option<String>>>,
+    pub(crate) tasks: Arc<crate::mcp::tasks::TaskManager>,
     vec_enabled: bool,
     vec_dims: usize,
     rrf_k: f64,
@@ -162,6 +163,7 @@ impl Store {
             scan_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             watch_handle: Arc::new(std::sync::Mutex::new(None)),
             scan_result: Arc::new(std::sync::Mutex::new(None)),
+            tasks: crate::mcp::tasks::TaskManager::new(),
             vec_enabled,
             vec_dims: dims,
             rrf_k: cfg.search.rrf_k,
@@ -169,10 +171,10 @@ impl Store {
             _default_limit: cfg.search.default_limit,
             _list_limit: cfg.search.list_limit,
         };
+        store.initialize().await?;
         if vec_enabled {
             store.init_vec().await?;
         }
-        store.initialize().await?;
         // Build KG if enabled (after initialize so table exists)
         let store = if cfg.knowledge_graph.enabled {
             let kg = KnowledgeGraph::build(&store.pool).await?;
@@ -205,16 +207,34 @@ impl Store {
         sqlx::query("CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY, content TEXT, tool_name TEXT, session_id TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
         // Knowledge Graph triples (optional, only created if config enables it)
         let _ = sqlx::query("CREATE TABLE IF NOT EXISTS kg_triples (id TEXT PRIMARY KEY, subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL, confidence REAL DEFAULT 1.0, source_memory_id TEXT, project TEXT, created_at TEXT NOT NULL)").execute(&self.pool).await;
-        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_subject ON kg_triples(subject)").execute(&self.pool).await;
-        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_object ON kg_triples(object)").execute(&self.pool).await;
-        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_predicate ON kg_triples(predicate)").execute(&self.pool).await;
-        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_memory ON kg_triples(source_memory_id)").execute(&self.pool).await;
-        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_project ON kg_triples(project)").execute(&self.pool).await;
+        let _ =
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_subject ON kg_triples(subject)")
+                .execute(&self.pool)
+                .await;
+        let _ =
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_object ON kg_triples(object)")
+                .execute(&self.pool)
+                .await;
+        let _ = sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_kg_triples_predicate ON kg_triples(predicate)",
+        )
+        .execute(&self.pool)
+        .await;
+        let _ = sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_kg_triples_memory ON kg_triples(source_memory_id)",
+        )
+        .execute(&self.pool)
+        .await;
+        let _ =
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_project ON kg_triples(project)")
+                .execute(&self.pool)
+                .await;
         let _ = sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_triples_spo ON kg_triples(subject, predicate, object, project)").execute(&self.pool).await;
         Ok(())
     }
 
     /// Add a SPO triple to the knowledge graph.
+    #[allow(dead_code)]
     pub async fn add_triple(
         &self,
         subject: &str,
@@ -229,7 +249,8 @@ impl Store {
         sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,source_memory_id,project,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)")
             .bind(&id).bind(subject).bind(predicate).bind(object).bind(confidence).bind(&source_memory_id).bind(&project).bind(&now)
             .execute(&self.pool).await?;
-        self.graph.add_triple_local(subject, predicate, object, confidence, source_memory_id);
+        self.graph
+            .add_triple_local(subject, predicate, object, confidence, source_memory_id);
         Ok(id)
     }
 
@@ -260,27 +281,43 @@ impl Store {
         // Sync petgraph
         // Sync all symbols and relations
         for sym in &symbols {
-            self.graph.add_triple_local(&sym.name, "label", &sym.kind, 1.0, None);
+            self.graph
+                .add_triple_local(&sym.name, "label", &sym.kind, 1.0, None);
         }
         for rel in &relations {
-            self.graph.add_triple_local(&rel.source, &rel.relation, &rel.target, 1.0, None);
+            self.graph
+                .add_triple_local(&rel.source, &rel.relation, &rel.target, 1.0, None);
         }
 
         if let Ok(mut r) = self.scan_result.lock() {
-            *r = Some(format!("kg_scan: {} symbols, {} relations", symbols.len(), relations.len()));
+            *r = Some(format!(
+                "kg_scan: {} symbols, {} relations",
+                symbols.len(),
+                relations.len()
+            ));
         }
-        if std::process::Command::new("git").arg("--version").output().is_ok() {
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_ok()
+        {
             if let Some(ref git_root) = detect_project_git_root(root) {
                 if let Err(e) = self.scan_git_history(git_root, &project).await {
                     log::warn!("kg_scan: git history scan failed: {e}");
                 }
             }
         }
-        log::info!("kg_scan: {} symbols, {} relations from {:?}", symbols.len(), relations.len(), root);
+        log::info!(
+            "kg_scan: {} symbols, {} relations from {:?}",
+            symbols.len(),
+            relations.len(),
+            root
+        );
         Ok((symbols.len(), relations.len()))
     }
 
     /// Start file watcher: auto-scan on code changes.
+    #[allow(dead_code)]
     pub fn start_watch(&self, root: &std::path::Path) {
         use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
         use std::sync::mpsc;
@@ -290,20 +327,54 @@ impl Store {
         let (tx, rx) = mpsc::channel::<Result<notify::Event, notify::Error>>();
         let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
             Ok(w) => w,
-            Err(e) => { log::warn!("kg_watch: failed to create watcher: {e}"); return; }
+            Err(e) => {
+                log::warn!("kg_watch: failed to create watcher: {e}");
+                return;
+            }
         };
         if let Err(e) = watcher.watch(&root, RecursiveMode::Recursive) {
-            log::warn!("kg_watch: failed to watch {root:?}: {e}"); return;
+            log::warn!("kg_watch: failed to watch {root:?}: {e}");
+            return;
         }
         let handle = tokio::spawn(async move {
             log::info!("kg_watch: watching {root:?} for changes");
             loop {
                 match rx.recv() {
                     Ok(Ok(event)) => {
-                        let relevant = event.paths.iter().any(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e, "rs" | "py" | "ts" | "tsx" | "js" | "jsx" | "java" | "go" | "rb" | "php" | "swift" | "kt" | "c" | "cpp" | "h" | "hpp" | "cs" | "scala" | "sh" | "bash" | "zsh")));
-                        if !relevant { continue; }
+                        let relevant = event.paths.iter().any(|p| {
+                            p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                                matches!(
+                                    e,
+                                    "rs" | "py"
+                                        | "ts"
+                                        | "tsx"
+                                        | "js"
+                                        | "jsx"
+                                        | "java"
+                                        | "go"
+                                        | "rb"
+                                        | "php"
+                                        | "swift"
+                                        | "kt"
+                                        | "c"
+                                        | "cpp"
+                                        | "h"
+                                        | "hpp"
+                                        | "cs"
+                                        | "scala"
+                                        | "sh"
+                                        | "bash"
+                                        | "zsh"
+                                )
+                            })
+                        });
+                        if !relevant {
+                            continue;
+                        }
                         if matches!(event.kind, EventKind::Modify(_)) {
-                            if scan_running.load(std::sync::atomic::Ordering::Acquire) { continue; }
+                            if scan_running.load(std::sync::atomic::Ordering::Acquire) {
+                                continue;
+                            }
                             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         }
                         log::info!("kg_watch: change detected, re-scanning...");
@@ -316,25 +387,44 @@ impl Store {
                 }
             }
         });
-        if let Ok(mut h) = self.watch_handle.lock() { *h = Some(handle); }
+        if let Ok(mut h) = self.watch_handle.lock() {
+            *h = Some(handle);
+        }
         std::mem::forget(watcher);
     }
 
     /// Stop file watcher.
+    #[allow(dead_code)]
     pub fn stop_watch(&self) {
         if let Ok(mut h) = self.watch_handle.lock() {
-            if let Some(handle) = h.take() { handle.abort(); log::info!("kg_watch: stopped"); }
+            if let Some(handle) = h.take() {
+                handle.abort();
+                log::info!("kg_watch: stopped");
+            }
         }
     }
 
     /// Scan git history and write commit/file relationships.
-    async fn scan_git_history(&self, git_root: &std::path::Path, project: &Option<String>) -> Result<()> {
+    async fn scan_git_history(
+        &self,
+        git_root: &std::path::Path,
+        project: &Option<String>,
+    ) -> Result<()> {
         use std::process::Command;
         let now = chrono::Utc::now().to_rfc3339();
         let output = Command::new("git")
-            .args(["log", "--name-only", "--pretty=format:COMMIT%x00%H%x00%s%x00%an%x00%ai", "-100", "--diff-filter=AM"])
-            .current_dir(git_root).output()?;
-        if !output.status.success() { return Ok(()); }
+            .args([
+                "log",
+                "--name-only",
+                "--pretty=format:COMMIT%x00%H%x00%s%x00%an%x00%ai",
+                "-100",
+                "--diff-filter=AM",
+            ])
+            .current_dir(git_root)
+            .output()?;
+        if !output.status.success() {
+            return Ok(());
+        }
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut commit_hash = String::new();
         let mut commit_msg = String::new();
@@ -344,13 +434,13 @@ impl Store {
             if line.starts_with("COMMIT ") {
                 if !commit_hash.is_empty() && in_files {
                     let cid = format!("commit:{}", &commit_hash[..8]);
-                    let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(&project).bind(&now).execute(&self.pool).await;
+                    let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(project).bind(&now).execute(&self.pool).await;
                     if !commit_msg.is_empty() {
                         let ms: String = commit_msg.chars().take(80).collect();
-                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(&project).bind(&now).execute(&self.pool).await;
+                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(project).bind(&now).execute(&self.pool).await;
                     }
                     if !commit_author.is_empty() {
-                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(&project).bind(&now).execute(&self.pool).await;
+                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(project).bind(&now).execute(&self.pool).await;
                     }
                 }
                 let parts: Vec<&str> = line.split(' ').collect();
@@ -362,21 +452,26 @@ impl Store {
                 in_files = true;
             } else if in_files && !line.is_empty() {
                 let file_path = line.trim();
-                if file_path.is_empty() { continue; }
+                if file_path.is_empty() {
+                    continue;
+                }
                 let cid = format!("commit:{}", &commit_hash[..8]);
-                let stem = std::path::Path::new(file_path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(format!("file:{}", stem)).bind("modified_in").bind(&cid).bind(&project).bind(&now).execute(&self.pool).await;
+                let stem = std::path::Path::new(file_path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(format!("file:{}", stem)).bind("modified_in").bind(&cid).bind(project).bind(&now).execute(&self.pool).await;
             }
         }
         if !commit_hash.is_empty() && in_files {
             let cid = format!("commit:{}", &commit_hash[..8]);
-            let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(&project).bind(&now).execute(&self.pool).await;
+            let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(project).bind(&now).execute(&self.pool).await;
             if !commit_msg.is_empty() {
                 let ms: String = commit_msg.chars().take(80).collect();
-                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(&project).bind(&now).execute(&self.pool).await;
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(project).bind(&now).execute(&self.pool).await;
             }
             if !commit_author.is_empty() {
-                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(&project).bind(&now).execute(&self.pool).await;
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(project).bind(&now).execute(&self.pool).await;
             }
         }
         Ok(())
@@ -449,22 +544,32 @@ impl Store {
         let lim = limit.min(50) as i64;
 
         #[allow(clippy::type_complexity)]
-        let rows: Vec<(String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<i32>, Option<String>, f64)> =
-            if let Some(t) = memory_type {
-                sqlx::query_as(
+        let rows: Vec<(
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<i32>,
+            Option<String>,
+            f64,
+        )> = if let Some(t) = memory_type {
+            sqlx::query_as(
                     "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid WHERE m.deleted_at IS NULL AND m.type = ?4 AND v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
                 )
                 .bind(&json_vec).bind(lim).bind(lim).bind(t)
                 .fetch_all(&self.pool)
                 .await?
-            } else {
-                sqlx::query_as(
+        } else {
+            sqlx::query_as(
                     "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid WHERE m.deleted_at IS NULL AND v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
                 )
                 .bind(&json_vec).bind(lim).bind(lim)
                 .fetch_all(&self.pool)
                 .await?
-            };
+        };
 
         Ok(rows
             .into_iter()
@@ -678,7 +783,12 @@ impl Store {
         Ok(results)
     }
 
-    pub async fn list(&self, limit: u8, memory_type: Option<&str>, offset: u32) -> Result<Vec<Memory>> {
+    pub async fn list(
+        &self,
+        limit: u8,
+        memory_type: Option<&str>,
+        offset: u32,
+    ) -> Result<Vec<Memory>> {
         let rows: Vec<MemoryRow> = if let Some(t) = memory_type {
             sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories WHERE type=?1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?2 OFFSET ?3")
                 .bind(t).bind(limit.min(MAX_LIMIT) as i64).bind(offset).fetch_all(&self.pool).await?
@@ -707,12 +817,11 @@ impl Store {
     pub async fn forget(&self, id: &str) -> Result<()> {
         // Also delete from vec0 if enabled (FTS TRIGGER handles FTS cleanup automatically)
         if self.vec_enabled {
-            if let Ok(Some(rid)) = sqlx::query_scalar::<_, i64>(
-                "SELECT rowid FROM memories WHERE id = ?1",
-            )
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
+            if let Ok(Some(rid)) =
+                sqlx::query_scalar::<_, i64>("SELECT rowid FROM memories WHERE id = ?1")
+                    .bind(id)
+                    .fetch_optional(&self.pool)
+                    .await
             {
                 sqlx::query("DELETE FROM vec_memories WHERE rowid = ?1")
                     .bind(rid)
@@ -1087,7 +1196,23 @@ fn parse_json(val: &Option<String>) -> Option<Vec<String>> {
 
 /// Detect project name from path or git for code scanning.
 fn detect_project_git_root(root: &std::path::Path) -> Option<std::path::PathBuf> {
-    std::process::Command::new("git").args(["rev-parse", "--show-toplevel"]).current_dir(root).output().ok().and_then(|o| if o.status.success() { let p = String::from_utf8_lossy(&o.stdout).trim().to_string(); if p.is_empty() { None } else { Some(std::path::PathBuf::from(p)) } } else { None })
+    std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                let p = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if p.is_empty() {
+                    None
+                } else {
+                    Some(std::path::PathBuf::from(p))
+                }
+            } else {
+                None
+            }
+        })
 }
 
 fn detect_project_for_scan(root: &std::path::Path) -> Option<String> {
@@ -1136,7 +1261,13 @@ mod tests {
         sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, source_file TEXT, importance INTEGER DEFAULT 3, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT, deleted_at TEXT)")
             .execute(&pool).await.unwrap();
 
-        async fn ins(pool: &sqlx::SqlitePool, content: &str, blob: &[u8], model: &str, dims: i64) -> String {
+        async fn ins(
+            pool: &sqlx::SqlitePool,
+            content: &str,
+            blob: &[u8],
+            model: &str,
+            dims: i64,
+        ) -> String {
             let id = format!("mem_{}", uuid::Uuid::new_v4());
             let now = chrono::Utc::now().to_rfc3339();
             sqlx::query("INSERT INTO memories (id,type,content,importance,created_at,updated_at) VALUES (?1,'fact',?2,3,?3,?3)")
@@ -1158,8 +1289,14 @@ mod tests {
             "SELECT embedding_dims FROM memories WHERE embedding IS NOT NULL GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1"
         ).fetch_optional(&pool).await.unwrap();
         assert_eq!(sd, Some(64));
-        assert!(sd.is_some_and(|d| d as usize != 128), "64 vs 128 should trigger rebuild");
-        assert!(!sd.is_some_and(|d| d as usize != 64), "64 vs 64 should NOT trigger rebuild");
+        assert!(
+            sd.is_some_and(|d| d as usize != 128),
+            "64 vs 128 should trigger rebuild"
+        );
+        assert!(
+            !sd.is_some_and(|d| d as usize != 64),
+            "64 vs 64 should NOT trigger rebuild"
+        );
 
         // NULL embeddings ignored by GROUP BY
         let sd2: Option<i64> = sqlx::query_scalar(
@@ -1168,22 +1305,152 @@ mod tests {
         assert_eq!(sd2, Some(64), "NULL emb should not affect stored_dims");
 
         // ─── embed_pending SQL ───
-        let id_null  = ins(&pool, "pending", &[], "", 0).await;
+        let id_null = ins(&pool, "pending", &[], "", 0).await;
         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
-        let id_fresh = ins(&pool, "fresh", &fake_blob(64,0.1), "curr:64d", 64).await;
-        let id_stale = ins(&pool, "stale", &fake_blob(64,0.1), "old:64d", 64).await;
-        let id_wd    = ins(&pool, "wd", &fake_blob(32,0.1), "old:32d", 32).await;
+        let id_fresh = ins(&pool, "fresh", &fake_blob(64, 0.1), "curr:64d", 64).await;
+        let id_stale = ins(&pool, "stale", &fake_blob(64, 0.1), "old:64d", 64).await;
+        let id_wd = ins(&pool, "wd", &fake_blob(32, 0.1), "old:32d", 32).await;
 
         let pending: Vec<(String, String)> = sqlx::query_as(
             "SELECT id, content FROM memories WHERE deleted_at IS NULL AND (embedding IS NULL OR embedding_model IS NOT ?2 OR embedding_dims IS NOT ?3) ORDER BY embedding IS NULL DESC, created_at ASC LIMIT ?1"
         ).bind(100i64).bind("curr:64d").bind(64i64)
          .fetch_all(&pool).await.unwrap();
 
-        let pids: Vec<&str> = pending.iter().map(|(id,_)| id.as_str()).collect();
-        assert!(pids.contains(&id_null.as_str()), "NULL embed must be pending");
-        assert!(!pids.contains(&id_fresh.as_str()), "fresh must NOT be pending");
-        assert!(pids.contains(&id_stale.as_str()), "stale model must be pending");
+        let pids: Vec<&str> = pending.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(
+            pids.contains(&id_null.as_str()),
+            "NULL embed must be pending"
+        );
+        assert!(
+            !pids.contains(&id_fresh.as_str()),
+            "fresh must NOT be pending"
+        );
+        assert!(
+            pids.contains(&id_stale.as_str()),
+            "stale model must be pending"
+        );
         assert!(pids.contains(&id_wd.as_str()), "wrong dims must be pending");
-        assert_eq!(pids[0], id_null.as_str(), "NULL should sort first by created_at");
+        assert_eq!(
+            pids[0],
+            id_null.as_str(),
+            "NULL should sort first by created_at"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_scan_git_history() {
+        use std::process::Command;
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path().join("test_repo");
+        std::fs::create_dir(&git_dir).unwrap();
+
+        // Initialize git repo
+        Command::new("git")
+            .args(["init"])
+            .current_dir(&git_dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&git_dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Tester"])
+            .current_dir(&git_dir)
+            .output()
+            .unwrap();
+
+        // Create first file and commit
+        std::fs::write(git_dir.join("hello.rs"), "fn hello() {}").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(&git_dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "feat: add hello function"])
+            .current_dir(&git_dir)
+            .output()
+            .unwrap();
+
+        // Create second file and commit
+        std::fs::write(git_dir.join("main.rs"), "fn main() {}").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(&git_dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "feat: add main entry"])
+            .current_dir(&git_dir)
+            .output()
+            .unwrap();
+
+        // Create Store — it creates kg_triples table automatically in its own DB
+        let mut cfg = crate::config::Config::load(None, None);
+        cfg.db_dir = Some(tmp.path().to_path_buf());
+        cfg.embedding.backend = crate::config::EmbeddingBackend::None;
+        cfg.knowledge_graph = crate::config::KnowledgeGraphConfig { enabled: true };
+
+        let store = crate::storage::Store::open(&cfg, None).await.unwrap();
+
+        // Run git history scan
+        store.scan_git_history(&git_dir, &None).await.unwrap();
+
+        // Query through store's pool
+        let pool = store.pool.clone();
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT subject, predicate, object FROM kg_triples WHERE subject LIKE 'commit:%'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert!(!rows.is_empty(), "scan_git_history should produce triples");
+
+        // Verify commit messages
+        let messages: Vec<&str> = rows
+            .iter()
+            .filter_map(|(_, p, o)| {
+                if p == "message" {
+                    Some(o.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            messages.contains(&"feat: add hello function"),
+            "should have first commit message"
+        );
+        assert!(
+            messages.contains(&"feat: add main entry"),
+            "should have second commit message"
+        );
+
+        // Verify author
+        let authors: Vec<&str> = rows
+            .iter()
+            .filter_map(|(_, p, o)| {
+                if p == "author" {
+                    Some(o.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(authors.contains(&"Tester"), "should have author Tester");
+
+        // Verify file relations
+        let file_rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT subject, predicate, object FROM kg_triples WHERE subject LIKE 'file:%'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(!file_rows.is_empty(), "should have file triples");
+
+        pool.close().await;
     }
 }

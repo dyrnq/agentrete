@@ -346,12 +346,7 @@ vendor = "ollama"
 model = "granite-embedding:278m"
 "#;
         let cfg: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(
-            cfg.embedding
-                .remote
-                .vendor,
-            Some(RemoteVendor::Ollama)
-        );
+        assert_eq!(cfg.embedding.remote.vendor, Some(RemoteVendor::Ollama));
     }
 
     #[test]

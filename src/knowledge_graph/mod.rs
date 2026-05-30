@@ -105,7 +105,10 @@ impl KnowledgeGraph {
         let mut results = Vec::new();
 
         if direction == "outgoing" || direction == "both" {
-            for edge in inner.graph.edges_directed(idx, petgraph::Direction::Outgoing) {
+            for edge in inner
+                .graph
+                .edges_directed(idx, petgraph::Direction::Outgoing)
+            {
                 let target = &inner.graph[edge.target()];
                 if predicate.map_or(true, |p| p == edge.weight().predicate) {
                     results.push((
@@ -118,7 +121,10 @@ impl KnowledgeGraph {
         }
 
         if direction == "incoming" || direction == "both" {
-            for edge in inner.graph.edges_directed(idx, petgraph::Direction::Incoming) {
+            for edge in inner
+                .graph
+                .edges_directed(idx, petgraph::Direction::Incoming)
+            {
                 let source = &inner.graph[edge.source()];
                 if direction == "both" && results.iter().any(|(t, _, _)| t == source) {
                     continue;
@@ -157,7 +163,10 @@ impl KnowledgeGraph {
                 break;
             }
             // Find the incoming edge whose source has a smaller distance
-            for edge in inner.graph.edges_directed(current, petgraph::Direction::Incoming) {
+            for edge in inner
+                .graph
+                .edges_directed(current, petgraph::Direction::Incoming)
+            {
                 let prev = edge.source();
                 if dist_map.get(&prev).is_some_and(|d| *d < dist_map[&current]) {
                     path.push(prev);
@@ -189,7 +198,14 @@ impl KnowledgeGraph {
     }
 
     /// Add a triple to the in-memory graph (called after SQLite insert).
-    pub fn add_triple_local(&self, subject: &str, predicate: &str, object: &str, confidence: f32, source_memory_id: Option<String>) {
+    pub fn add_triple_local(
+        &self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        confidence: f32,
+        source_memory_id: Option<String>,
+    ) {
         if let Ok(mut inner) = self.inner.write() {
             let sub = subject.to_string();
             let obj = object.to_string();
@@ -204,15 +220,18 @@ impl KnowledgeGraph {
             }
             let sub_idx = inner.node_index[&sub];
             let obj_idx = inner.node_index[&obj];
-            inner.graph.add_edge(sub_idx, obj_idx, TripleEdge {
-                predicate: predicate.to_string(),
-                confidence,
-                source_memory_id,
-            });
+            inner.graph.add_edge(
+                sub_idx,
+                obj_idx,
+                TripleEdge {
+                    predicate: predicate.to_string(),
+                    confidence,
+                    source_memory_id,
+                },
+            );
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -224,7 +243,10 @@ mod tests {
             graph: DiGraph::new(),
             node_index: HashMap::new(),
         }));
-        KnowledgeGraph { inner, enabled: true }
+        KnowledgeGraph {
+            inner,
+            enabled: true,
+        }
     }
 
     #[test]
@@ -318,8 +340,11 @@ mod tests {
 
         let inner = kg.inner.read().unwrap();
         let idx = inner.node_index.get("x").unwrap();
-        let edge = inner.graph.edges_directed(*idx, petgraph::Direction::Outgoing)
-            .next().unwrap();
+        let edge = inner
+            .graph
+            .edges_directed(*idx, petgraph::Direction::Outgoing)
+            .next()
+            .unwrap();
         assert!((edge.weight().confidence - 0.5).abs() < 1e-6);
         assert_eq!(edge.weight().source_memory_id, Some("mem_123".to_string()));
     }
@@ -345,7 +370,11 @@ mod tests {
         ];
         for (input, expected) in cases {
             let result = super::scanner::extract_name(input);
-            assert_eq!(result, expected, "extract_name({:?}) should be {:?}", input, expected);
+            assert_eq!(
+                result, expected,
+                "extract_name({:?}) should be {:?}",
+                input, expected
+            );
         }
     }
 
@@ -361,15 +390,28 @@ mod tests {
         ];
         for (text, lang, expected) in cases {
             let result = super::scanner::extract_import_target(text, lang);
-            assert_eq!(result, expected, "extract_import_target({:?}, {:?}) should be {:?}", text, lang, expected);
+            assert_eq!(
+                result, expected,
+                "extract_import_target({:?}, {:?}) should be {:?}",
+                text, lang, expected
+            );
         }
     }
 
     #[test]
     fn test_kind_to_symbol_kind() {
         assert_eq!(super::scanner::kind_to_symbol_kind("struct_item"), "struct");
-        assert_eq!(super::scanner::kind_to_symbol_kind("function_item"), "function");
-        assert_eq!(super::scanner::kind_to_symbol_kind("class_declaration"), "class");
-        assert_eq!(super::scanner::kind_to_symbol_kind("unknown_thing"), "unknown_thing");
+        assert_eq!(
+            super::scanner::kind_to_symbol_kind("function_item"),
+            "function"
+        );
+        assert_eq!(
+            super::scanner::kind_to_symbol_kind("class_declaration"),
+            "class"
+        );
+        assert_eq!(
+            super::scanner::kind_to_symbol_kind("unknown_thing"),
+            "unknown_thing"
+        );
     }
 }

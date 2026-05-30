@@ -15,8 +15,7 @@ pub(crate) fn tools_list() -> Value {
         {"name":"memory_stats","description":"Stats","inputSchema":{"type":"object","properties":{},"required":[]}},
         {"name":"memory_compact","description":"Deduplicate memories (exact or semantic) and reclaim disk space","inputSchema":{"type":"object","properties":{"mode":{"type":"string"}},"required":[]}},
         {"name":"kg_query","description":"Query knowledge graph: neighbors, shortest path, or subgraph","inputSchema":{"type":"object","properties":{"mode":{"type":"string"},"entity":{"type":"string"},"target":{"type":"string"},"predicate":{"type":"string"},"direction":{"type":"string"},"project":{"type":"string"}},"required":["mode"]}},
-        {"name":"kg_scan","description":"Start a codebase scan in background. Results are saved automatically when done.","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},{"name":"kg_scan_status","description":"Check if a background scan is running","inputSchema":{"type":"object","properties":{},"required":[]}}
-    ]})
+        {"name":"kg_scan","description":"Scan codebase with optional file watching. If watch=true, starts file watcher after scan completes.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"watch":{"type":"boolean"}},"required":["path"]}},{"name":"kg_scan_status","description":"Check if a background scan is running","inputSchema":{"type":"object","properties":{},"required":[]}}    ]})
 }
 
 /// Detect project name from git repo root, falling back to current directory.
@@ -83,35 +82,34 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                     let dry_run = a["dry_run"].as_bool().unwrap_or(false);
                     if dry_run {
                         let preview_id = format!("mem_{}", uuid::Uuid::new_v4());
-                        jsonrpc_ok(
+                        return jsonrpc_ok(
                             &serde_json::Value::String(preview_id.clone()),
                             serde_json::json!({"content":[{"type":"text","text":format!("Preview: {} (not saved)", preview_id)}]}),
-                        )
-                    } else {
-                        let mt = a["type"].as_str().map(|s| s.to_string());
-                        let tags = a["tags"]
-                            .as_str()
-                            .map(|s| s.split(',').map(|t| t.trim().to_string()).collect());
-                        match store
-                            .save(crate::types::NewMemory {
-                                content: c.to_string(),
-                                memory_type: mt,
-                                tags,
-                                files: None,
-                                project: a["project"]
-                                    .as_str()
-                                    .map(|s| s.to_string())
-                                    .or_else(detect_project),
-                                source_file: a["source_file"].as_str().map(|s| s.to_string()),
-                            })
-                            .await
-                        {
-                            Ok(id) => jsonrpc_ok(
-                                &serde_json::Value::String(id.clone()),
-                                serde_json::json!({"content":[{"type":"text","text":format!("Saved: {}",id)}]}),
-                            ),
-                            Err(e) => jsonrpc_err(&id, -32000, &format!("Save failed: {}", e)),
-                        }
+                        );
+                    }
+                    let mt = a["type"].as_str().map(|s| s.to_string());
+                    let tags = a["tags"]
+                        .as_str()
+                        .map(|s| s.split(',').map(|t| t.trim().to_string()).collect());
+                    match store
+                        .save(crate::types::NewMemory {
+                            content: c.to_string(),
+                            memory_type: mt,
+                            tags,
+                            files: None,
+                            project: a["project"]
+                                .as_str()
+                                .map(|s| s.to_string())
+                                .or_else(detect_project),
+                            source_file: a["source_file"].as_str().map(|s| s.to_string()),
+                        })
+                        .await
+                    {
+                        Ok(id) => jsonrpc_ok(
+                            &serde_json::Value::String(id.clone()),
+                            serde_json::json!({"content":[{"type":"text","text":format!("Saved: {}",id)}]}),
+                        ),
+                        Err(e) => jsonrpc_err(&id, -32000, &format!("Save failed: {}", e)),
                     }
                 }
                 "memory_search" => {
@@ -141,11 +139,14 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                                     // Append KG context if available
                                     if store.graph.is_enabled() {
                                         if let Ok(triples) = futures::executor::block_on(
-                                            store.graph.query_by_memory_id(&store.pool, &x.id)
+                                            store.graph.query_by_memory_id(&store.pool, &x.id),
                                         ) {
                                             for (s, p, o) in &triples {
-                                                text.push_str(&format!("
-  └─ kg: {} --[{}]--> {}", s, p, o));
+                                                text.push_str(&format!(
+                                                    "
+  └─ kg: {} --[{}]--> {}",
+                                                    s, p, o
+                                                ));
                                             }
                                         }
                                     }
@@ -158,7 +159,11 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                     }
                 }
                 "memory_list" => match store
-                    .list(a["limit"].as_u64().unwrap_or(20) as u8, a["type"].as_str(), a["offset"].as_u64().unwrap_or(0) as u32)
+                    .list(
+                        a["limit"].as_u64().unwrap_or(20) as u8,
+                        a["type"].as_str(),
+                        a["offset"].as_u64().unwrap_or(0) as u32,
+                    )
                     .await
                 {
                     Ok(e) => {
@@ -207,44 +212,64 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                 }
                 "kg_scan" => {
                     let path = a["path"].as_str().unwrap_or(".").to_string();
+                    let _do_watch = a["watch"].as_bool().unwrap_or(false);
                     if !store.graph.is_enabled() {
                         jsonrpc_err(&id, -32000, "Knowledge graph is disabled. Set [knowledge_graph] enabled = true in config.")
-                    } else if store.scan_running.load(std::sync::atomic::Ordering::Acquire) {
-                        jsonrpc_err(&id, -32001, "A scan is already in progress. Check kg_scan_status for progress.")
+                    } else if store
+                        .scan_running
+                        .load(std::sync::atomic::Ordering::Acquire)
+                    {
+                        jsonrpc_err(
+                            &id,
+                            -32001,
+                            "A scan is already in progress. Check kg_scan_status for progress.",
+                        )
                     } else {
                         let store2 = store.clone();
+                        let (task_id, cancel_flag, _notify) = store.tasks.register().await;
+                        let task_id_clone = task_id.clone();
+                        let cancel_clone = cancel_flag.clone();
+                        store
+                            .scan_running
+                            .store(true, std::sync::atomic::Ordering::Release);
                         tokio::spawn(async move {
-                            match store2.scan_codebase(std::path::Path::new(&path)).await {
-                                Ok((syms, rels)) => log::info!("kg_scan task done: {} symbols, {} relations", syms, rels),
-                                Err(e) => log::warn!("kg_scan task failed: {}", e),
+                            let result = match store2
+                                .scan_codebase(std::path::Path::new(&path))
+                                .await
+                            {
+                                Ok((syms, rels)) => {
+                                    serde_json::json!({"ok": true, "symbols": syms, "relations": rels, "message": format!("Scanned {} symbols, {} relations", syms, rels)})
+                                }
+                                Err(e) => {
+                                    serde_json::json!({"ok": false, "error": e.to_string()})
+                                }
+                            };
+                            store2
+                                .scan_running
+                                .store(false, std::sync::atomic::Ordering::Release);
+                            if cancel_clone.load(std::sync::atomic::Ordering::Acquire) == 0 {
+                                store2.tasks.complete(&task_id_clone, result).await;
                             }
                         });
-                        jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":"Scan started in background. Use kg_scan_status to check progress."}]}))
-                    }
-                }
-                "kg_watch" => {
-                    let action = a["action"].as_str().unwrap_or("");
-                    match action {
-                        "start" => {
-                            let path = a["path"].as_str().unwrap_or(".");
-                            store.start_watch(std::path::Path::new(path));
-                            jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":format!("File watcher started on {}", path)}]}))
-                        }
-                        "stop" => {
-                            store.stop_watch();
-                            jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":"File watcher stopped"}]}))
-                        }
-                        _ => jsonrpc_err(&id, -32002, "kg_watch: action must be 'start' or 'stop'"),
+                        jsonrpc_ok(
+                            &id,
+                            serde_json::json!({"content":[{"type":"text","text":format!("Task {}: scan started. Use tasks/send to query or kg_scan_status to check.", task_id)}]}),
+                        )
                     }
                 }
                 "kg_scan_status" => {
-                    let running = store.scan_running.load(std::sync::atomic::Ordering::Acquire);
+                    let running = store
+                        .scan_running
+                        .load(std::sync::atomic::Ordering::Acquire);
                     let text = if running {
                         "Scan is running...".to_string()
                     } else {
                         "No scan running. Run kg_scan to start one.".to_string()
                     };
-                    jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":text}]}))
+                    jsonrpc_ok(
+                        &id,
+                        serde_json::json!({"content":[{"type":"text","text":text}]}),
+                    )
                 }
                 "kg_query" => {
                     let mode = a["mode"].as_str().unwrap_or("");
@@ -256,38 +281,73 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                     }
                     if mode == "neighbors" || mode == "subgraph" {
                         if entity.is_empty() {
-                            return jsonrpc_err(&id, -32002, "kg_query mode='neighbors' requires 'entity'");
+                            return jsonrpc_err(
+                                &id,
+                                -32002,
+                                "kg_query mode='neighbors' requires 'entity'",
+                            );
                         }
                         let results = store.graph.query_neighbors(entity, predicate, direction);
                         let text = if results.is_empty() {
                             format!("No relations found for '{}'", entity)
                         } else {
-                            let mut s = format!("Relations for '{}':
-", entity);
+                            let mut s = format!(
+                                "Relations for '{}':
+",
+                                entity
+                            );
                             for (target, rel, conf) in &results {
-                                s.push_str(&format!("  {} --[{}]--> {} (conf={})
-", entity, rel, target, conf));
+                                s.push_str(&format!(
+                                    "  {} --[{}]--> {} (conf={})
+",
+                                    entity, rel, target, conf
+                                ));
                             }
                             s
                         };
-                        jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":text}]}))
+                        jsonrpc_ok(
+                            &id,
+                            serde_json::json!({"content":[{"type":"text","text":text}]}),
+                        )
                     } else if mode == "path" {
                         if entity.is_empty() {
-                            return jsonrpc_err(&id, -32002, "kg_query mode='path' requires 'entity'");
+                            return jsonrpc_err(
+                                &id,
+                                -32002,
+                                "kg_query mode='path' requires 'entity'",
+                            );
                         }
                         let target = a["target"].as_str().unwrap_or("");
                         if target.is_empty() {
-                            return jsonrpc_err(&id, -32002, "kg_query mode='path' requires 'target'");
+                            return jsonrpc_err(
+                                &id,
+                                -32002,
+                                "kg_query mode='path' requires 'target'",
+                            );
                         }
                         match store.graph.query_path(entity, target) {
                             Some(path) => {
                                 let text = format!("Shortest path: {}", path.join(" → "));
-                                jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":text}]}))
+                                jsonrpc_ok(
+                                    &id,
+                                    serde_json::json!({"content":[{"type":"text","text":text}]}),
+                                )
                             }
-                            None => jsonrpc_err(&id, -32000, &format!("No path found between '{}' and '{}'", entity, target)),
+                            None => jsonrpc_err(
+                                &id,
+                                -32000,
+                                &format!("No path found between '{}' and '{}'", entity, target),
+                            ),
                         }
                     } else {
-                        jsonrpc_err(&id, -32002, &format!("kg_query: unknown mode '{}' (try 'neighbors' or 'path')", mode))
+                        jsonrpc_err(
+                            &id,
+                            -32002,
+                            &format!(
+                                "kg_query: unknown mode '{}' (try 'neighbors' or 'path')",
+                                mode
+                            ),
+                        )
                     }
                 }
                 "memory_stats" => match store.stats().await {
@@ -328,6 +388,95 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                     Err(e) => jsonrpc_err(&id, -32000, &format!("Stats failed: {}", e)),
                 },
                 _ => jsonrpc_err(&id, -32601, &format!("Unknown tool: {}", n)),
+            }
+        }
+        "tasks/send" => {
+            let name = params["name"].as_str().unwrap_or("");
+            let args = params.get("arguments").unwrap_or(&serde_json::Value::Null);
+            match name {
+                "kg_scan" => {
+                    let path = args["path"].as_str().unwrap_or(".").to_string();
+                    let _do_watch = args["watch"].as_bool().unwrap_or(false);
+                    if !store.graph.is_enabled() {
+                        jsonrpc_err(&id, -32000, "Knowledge graph is disabled")
+                    } else if store
+                        .scan_running
+                        .load(std::sync::atomic::Ordering::Acquire)
+                    {
+                        jsonrpc_err(&id, -32001, "A scan is already in progress")
+                    } else {
+                        let store2 = store.clone();
+                        let (task_id, cancel_flag, _notify) = store.tasks.register().await;
+                        let task_id_clone = task_id.clone();
+                        let cancel_clone = cancel_flag.clone();
+                        store
+                            .scan_running
+                            .store(true, std::sync::atomic::Ordering::Release);
+                        tokio::spawn(async move {
+                            let result = match store2
+                                .scan_codebase(std::path::Path::new(&path))
+                                .await
+                            {
+                                Ok((syms, rels)) => {
+                                    serde_json::json!({"ok": true, "symbols": syms, "relations": rels})
+                                }
+                                Err(e) => serde_json::json!({"ok": false, "error": e.to_string()}),
+                            };
+                            store2
+                                .scan_running
+                                .store(false, std::sync::atomic::Ordering::Release);
+                            if cancel_clone.load(std::sync::atomic::Ordering::Acquire) == 0 {
+                                store2.tasks.complete(&task_id_clone, result).await;
+                            }
+                        });
+                        if let Some(st) = store.tasks.status(&task_id).await {
+                            jsonrpc_ok(
+                                &id,
+                                serde_json::json!({"content":[{"type":"text","text":serde_json::to_string_pretty(&st).unwrap_or_default()}]}),
+                            )
+                        } else {
+                            jsonrpc_ok(
+                                &id,
+                                serde_json::json!({"content":[{"type":"text","text":format!("Task {} created", task_id)}]}),
+                            )
+                        }
+                    }
+                }
+                _ => jsonrpc_err(&id, -32602, &format!("Unknown task: {}", name)),
+            }
+        }
+        "tasks/cancel" => {
+            let task_id = params["id"].as_str().unwrap_or("");
+            if task_id.is_empty() {
+                jsonrpc_err(&id, -32602, "tasks/cancel requires params.id")
+            } else if store.tasks.cancel(task_id).await {
+                jsonrpc_ok(
+                    &id,
+                    serde_json::json!({"content":[{"type":"text","text":format!("Task {} cancelled", task_id)}]}),
+                )
+            } else {
+                jsonrpc_err(
+                    &id,
+                    -32000,
+                    &format!("Task {} not found or already completed", task_id),
+                )
+            }
+        }
+        "tasks/status" => {
+            let task_id = params["id"].as_str().unwrap_or("");
+            if task_id.is_empty() {
+                let all = store.tasks.all_statuses().await;
+                jsonrpc_ok(
+                    &id,
+                    serde_json::json!({"content":[{"type":"text","text":serde_json::to_string_pretty(&all).unwrap_or_default()}]}),
+                )
+            } else if let Some(st) = store.tasks.status(task_id).await {
+                jsonrpc_ok(
+                    &id,
+                    serde_json::json!({"content":[{"type":"text","text":serde_json::to_string_pretty(&st).unwrap_or_default()}]}),
+                )
+            } else {
+                jsonrpc_err(&id, -32000, &format!("Task {} not found", task_id))
             }
         }
         "ping" => jsonrpc_ok(&id, serde_json::json!({})),
