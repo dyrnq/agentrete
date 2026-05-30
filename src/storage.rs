@@ -198,6 +198,9 @@ impl Store {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at)")
             .execute(&self.pool)
             .await?;
+        sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_type ON memories(content, type) WHERE deleted_at IS NULL")
+            .execute(&self.pool)
+            .await?;
         sqlx::query("CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content, content_rowid='rowid', tokenize='unicode61')").execute(&self.pool).await?;
         // FTS auto-sync: INSERT trigger
         sqlx::query("CREATE TRIGGER IF NOT EXISTS memories_fts_ai AFTER INSERT ON memories WHEN new.deleted_at IS NULL BEGIN INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END;").execute(&self.pool).await?;
@@ -488,10 +491,20 @@ impl Store {
             .files
             .as_ref()
             .map(|t| serde_json::to_string(t).unwrap_or_default());
-        sqlx::query("INSERT INTO memories (id,type,content,tags,files,project,source_file,importance,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)")
+        let result = sqlx::query("INSERT OR IGNORE INTO memories (id,type,content,tags,files,project,source_file,importance,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)")
             .bind(&id).bind(&input.memory_type).bind(&input.content).bind(&tags).bind(&files).bind(&input.project).bind(&input.source_file).bind(3).bind(&now)
             .execute(&self.pool).await?;
-        // embedding=NULL — embed-worker picks it up later
+        if result.rows_affected() == 0 {
+            // Duplicate content+type — return existing ID
+            let existing: String = sqlx::query_scalar(
+                "SELECT id FROM memories WHERE content = ?1 AND type = ?2 AND deleted_at IS NULL"
+            )
+            .bind(&input.content)
+            .bind(&input.memory_type)
+            .fetch_one(&self.pool)
+            .await?;
+            return Ok(existing);
+        }
         Ok(id)
     }
 
