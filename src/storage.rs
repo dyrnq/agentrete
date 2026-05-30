@@ -9,6 +9,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::embed::embeddings::Embedder;
+use crate::knowledge_graph::KnowledgeGraph;
 use crate::types::{DbStats, Memory, NewMemory, SearchResult};
 
 // Embedded sqlite-vec extension for the current platform.
@@ -25,9 +26,10 @@ const RECALL_MULTIPLIER: u8 = 3;
 
 #[derive(Clone)]
 pub struct Store {
-    pool: SqlitePool,
+    pub(crate) pool: SqlitePool,
     path: PathBuf,
     embedder: Option<Arc<Embedder>>,
+    pub(crate) graph: KnowledgeGraph,
     vec_enabled: bool,
     vec_dims: usize,
     rrf_k: f64,
@@ -153,6 +155,7 @@ impl Store {
             pool,
             path,
             embedder: embedder.map(Arc::new),
+            graph: KnowledgeGraph::disabled(),
             vec_enabled,
             vec_dims: dims,
             rrf_k: cfg.search.rrf_k,
@@ -164,6 +167,13 @@ impl Store {
             store.init_vec().await?;
         }
         store.initialize().await?;
+        // Build KG if enabled (after initialize so table exists)
+        let store = if cfg.knowledge_graph.enabled {
+            let kg = KnowledgeGraph::build(&store.pool).await?;
+            Self { graph: kg, ..store }
+        } else {
+            store
+        };
         Ok(store)
     }
 
@@ -187,7 +197,69 @@ impl Store {
         sqlx::query("CREATE TRIGGER IF NOT EXISTS memories_fts_au AFTER UPDATE OF deleted_at ON memories WHEN new.deleted_at IS NOT NULL AND old.deleted_at IS NULL BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); END;").execute(&self.pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, data TEXT, metadata TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY, content TEXT, tool_name TEXT, session_id TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
+        // Knowledge Graph triples (optional, only created if config enables it)
+        let _ = sqlx::query("CREATE TABLE IF NOT EXISTS kg_triples (id TEXT PRIMARY KEY, subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL, confidence REAL DEFAULT 1.0, source_memory_id TEXT, project TEXT, created_at TEXT NOT NULL)").execute(&self.pool).await;
+        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_subject ON kg_triples(subject)").execute(&self.pool).await;
+        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_object ON kg_triples(object)").execute(&self.pool).await;
+        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_predicate ON kg_triples(predicate)").execute(&self.pool).await;
+        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_memory ON kg_triples(source_memory_id)").execute(&self.pool).await;
+        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_project ON kg_triples(project)").execute(&self.pool).await;
         Ok(())
+    }
+
+    /// Add a SPO triple to the knowledge graph.
+    pub async fn add_triple(
+        &self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        confidence: f32,
+        source_memory_id: Option<String>,
+        project: Option<String>,
+    ) -> Result<String> {
+        let id = format!("triple_{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("INSERT INTO kg_triples (id,subject,predicate,object,confidence,source_memory_id,project,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)")
+            .bind(&id).bind(subject).bind(predicate).bind(object).bind(confidence).bind(&source_memory_id).bind(&project).bind(&now)
+            .execute(&self.pool).await?;
+        self.graph.add_triple_local(subject, predicate, object, confidence, source_memory_id);
+        Ok(id)
+    }
+
+    /// Scan a codebase directory with tree-sitter and import results into KG.
+    pub async fn scan_codebase(&self, root: &std::path::Path) -> Result<(usize, usize)> {
+        let (symbols, relations) = crate::knowledge_graph::scanner::scan_directory(root)?;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        for sym in &symbols {
+            let id = format!("node_{}", uuid::Uuid::new_v4());
+            let _ = sqlx::query(
+                "INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'label',?3,1.0,NULL,?4)"
+            )
+            .bind(&id).bind(&sym.name).bind(&sym.kind).bind(&now)
+            .execute(&self.pool).await;
+        }
+
+        for rel in &relations {
+            let id = format!("rel_{}", uuid::Uuid::new_v4());
+            let _ = sqlx::query(
+                "INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,?3,?4,1.0,NULL,?5)"
+            )
+            .bind(&id).bind(&rel.source).bind(&rel.relation).bind(&rel.target).bind(&now)
+            .execute(&self.pool).await;
+        }
+
+        // Sync petgraph
+        // Sync all symbols and relations
+        for sym in &symbols {
+            self.graph.add_triple_local(&sym.name, "label", &sym.kind, 1.0, None);
+        }
+        for rel in &relations {
+            self.graph.add_triple_local(&rel.source, &rel.relation, &rel.target, 1.0, None);
+        }
+
+        log::info!("kg_scan: {} symbols, {} relations from {:?}", symbols.len(), relations.len(), root);
+        Ok((symbols.len(), relations.len()))
     }
 
     pub async fn save(&self, input: NewMemory) -> Result<String> {

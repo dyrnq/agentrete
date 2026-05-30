@@ -86,8 +86,16 @@ pub struct Model2VecConfig {
     pub endpoint: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Knowledge graph configuration.
+pub struct KnowledgeGraphConfig {
+    /// Enable SPO knowledge graph (petgraph + SQLite triples).
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 /// Search tuning parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchConfig {
     /// RRF merge constant (higher = less impact from ranking position).
     #[serde(default = "default_rrf_k")]
@@ -176,6 +184,8 @@ pub struct Config {
     /// Search tuning.
     #[serde(default)]
     pub search: SearchConfig,
+    #[serde(default)]
+    pub knowledge_graph: KnowledgeGraphConfig,
 }
 
 fn default_port_val() -> u16 {
@@ -190,6 +200,7 @@ impl Default for Config {
             db_dir: None,
             cache_dir: None,
             search: SearchConfig::default(),
+            knowledge_graph: KnowledgeGraphConfig::default(),
         }
     }
 }

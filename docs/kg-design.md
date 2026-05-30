@@ -100,13 +100,7 @@ pub struct KnowledgeGraph {
     enabled: bool,
 }
 
-// 图中节点
-pub struct Entity {
-    pub id: String,
-    pub name: String,
-    pub labels: Vec<String>,
-}
-
+// 图中节点 —— 节点只存 ID，实体属性通过 label/description 特化三元组查询
 // 图中边
 pub struct TripleEdge {
     pub predicate: String,
@@ -187,8 +181,20 @@ impl KnowledgeGraph {
 | `predicate` | string | 关系类型 |
 | `object` | string | 客体实体 ID |
 | `confidence` | number | 置信度（默认 1.0） |
-| `source_memory_id` | string | 来源记忆 ID（可选） |
+| `source_memory_id` | string | 来源记忆 ID（可选）。`memory_save` 返回的 id 可直接传入建立关联 |
 | `project` | string | 项目名（可选，自动从 git 检测） |
+
+典型使用流程：
+
+```
+memory_save(content="Use sqlx instead of rusqlite", type="decision")
+  → 返回 id="mem_xxx"
+
+kg_triple_add(source_memory_id="mem_xxx",
+              subject="agentrete", predicate="uses", object="sqlx")
+kg_triple_add(source_memory_id="mem_xxx",
+              subject="agentrete", predicate="deprecated", object="rusqlite")
+```
 
 ### 搜索联动
 
@@ -216,7 +222,7 @@ enabled = false
 
 - [ ] 添加 `petgraph = { version = "0.8.3", features = ["serde-1"] }` 依赖
 - [ ] 实现 `KnowledgeGraph` struct
-- [ ] `initialize()` 创建 `kg_triples` + `kg_entities` 表
+- [ ] `initialize()` 创建 `kg_triples` 表
 - [ ] `add_triple()` → INSERT INTO kg_triples + mark_dirty
 - [ ] `build_graph()` → 从 SQLite 全量加载 → petgraph DiGraph
 - [ ] `query_neighbors(entity, predicate, direction)` → petgraph 遍历

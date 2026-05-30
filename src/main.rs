@@ -10,6 +10,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 mod cli;
 mod config;
 mod embed;
+mod knowledge_graph;
 mod mcp;
 mod storage;
 mod types;
@@ -104,6 +105,11 @@ enum Commands {
         /// Optional: run as Streamable HTTP server on this port
         #[arg(short, long)]
         port: Option<u16>,
+    },
+    /// Scan a codebase and build knowledge graph
+    Scan {
+        /// Path to scan (default: current directory)
+        path: Option<String>,
     },
     /// Download an embedding model from HuggingFace mirror
     InstallModel {
@@ -378,6 +384,14 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
             println!("agentrete initialized successfully.");
             println!("Database: {}", stats.db_path);
             println!("Ready to save and search memories.");
+        }
+        Commands::Scan { path } => {
+            let root = path.as_deref().map(std::path::Path::new).unwrap_or(std::path::Path::new("."));
+            println!("Scanning {} ...", root.display());
+            match store.scan_codebase(root).await {
+                Ok((syms, rels)) => println!("Done: {} symbols, {} relationships", syms, rels),
+                Err(e) => eprintln!("Scan failed: {}", e),
+            }
         }
         Commands::Doctor => {
             let stats = store.stats().await?;

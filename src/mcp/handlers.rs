@@ -13,7 +13,10 @@ pub(crate) fn tools_list() -> Value {
         {"name":"memory_list","description":"List memories, optionally filtered by type","inputSchema":{"type":"object","properties":{"limit":{"type":"number"},"type":{"type":"string"},"offset":{"type":"number"}},"required":[]}},
         {"name":"memory_forget","description":"Delete","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
         {"name":"memory_stats","description":"Stats","inputSchema":{"type":"object","properties":{},"required":[]}},
-        {"name":"memory_compact","description":"Deduplicate memories (exact or semantic) and reclaim disk space","inputSchema":{"type":"object","properties":{"mode":{"type":"string"}},"required":[]}}
+        {"name":"memory_compact","description":"Deduplicate memories (exact or semantic) and reclaim disk space","inputSchema":{"type":"object","properties":{"mode":{"type":"string"}},"required":[]}},
+        {"name":"kg_query","description":"Query knowledge graph: neighbors, shortest path, or subgraph","inputSchema":{"type":"object","properties":{"mode":{"type":"string"},"entity":{"type":"string"},"target":{"type":"string"},"predicate":{"type":"string"},"direction":{"type":"string"},"project":{"type":"string"}},"required":["mode"]}},
+        {"name":"kg_scan","description":"Scan a codebase with tree-sitter and build knowledge graph","inputSchema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}},
+        {"name":"kg_triple_add","description":"Add a SPO triple to the knowledge graph","inputSchema":{"type":"object","properties":{"subject":{"type":"string"},"predicate":{"type":"string"},"object":{"type":"string"},"confidence":{"type":"number"},"source_memory_id":{"type":"string"},"project":{"type":"string"}},"required":["subject","predicate","object"]}}
     ]})
 }
 
@@ -128,14 +131,26 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                                         x.source_file.as_deref().unwrap_or("?"),
                                         x.project.as_deref().unwrap_or("?")
                                     );
-                                    serde_json::json!({"type":"text","text":format!(
+                                    let mut text = format!(
                                         "[{}] {} (score={:.2}) id={}  {}",
                                         x.memory_type.as_deref().unwrap_or("-"),
                                         x.content,
                                         x.score,
                                         x.id,
                                         meta
-                                    )})
+                                    );
+                                    // Append KG context if available
+                                    if store.graph.is_enabled() {
+                                        if let Ok(triples) = futures::executor::block_on(
+                                            store.graph.query_by_memory_id(&store.pool, &x.id)
+                                        ) {
+                                            for (s, p, o) in &triples {
+                                                text.push_str(&format!("
+  └─ kg: {} --[{}]--> {}", s, p, o));
+                                            }
+                                        }
+                                    }
+                                    serde_json::json!({"type":"text","text":text})
                                 })
                                 .collect();
                             jsonrpc_ok(&id, serde_json::json!({"content":items}))
@@ -189,6 +204,76 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                             serde_json::json!({"content":[{"type":"text","text":format!("Compacted ({mode}): {} duplicates removed, {} memories remain.", removed, remaining)}]}),
                         ),
                         Err(e) => jsonrpc_err(&id, -32000, &format!("Compact failed: {}", e)),
+                    }
+                }
+                "kg_scan" => {
+                    let path = a["path"].as_str().unwrap_or(".");
+                    if !store.graph.is_enabled() {
+                        jsonrpc_err(&id, -32000, "Knowledge graph is disabled. Set [knowledge_graph] enabled = true in config.")
+                    } else {
+                        match store.scan_codebase(std::path::Path::new(path)).await {
+                            Ok((syms, rels)) => jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":format!("Scanned: {} symbols, {} relationships", syms, rels)}]})),
+                            Err(e) => jsonrpc_err(&id, -32000, &format!("Scan failed: {}", e)),
+                        }
+                    }
+                }
+                "kg_query" => {
+                    let mode = a["mode"].as_str().unwrap_or("");
+                    let entity = a["entity"].as_str().unwrap_or("");
+                    let predicate = a["predicate"].as_str();
+                    let direction = a["direction"].as_str().unwrap_or("both");
+                    if !store.graph.is_enabled() {
+                        return jsonrpc_err(&id, -32000, "Knowledge graph is disabled. Set [knowledge_graph] enabled = true in config.");
+                    }
+                    if mode == "neighbors" || mode == "subgraph" {
+                        if entity.is_empty() {
+                            return jsonrpc_err(&id, -32002, "kg_query mode='neighbors' requires 'entity'");
+                        }
+                        let results = store.graph.query_neighbors(entity, predicate, direction);
+                        let text = if results.is_empty() {
+                            format!("No relations found for '{}'", entity)
+                        } else {
+                            let mut s = format!("Relations for '{}':
+", entity);
+                            for (target, rel, conf) in &results {
+                                s.push_str(&format!("  {} --[{}]--> {} (conf={})
+", entity, rel, target, conf));
+                            }
+                            s
+                        };
+                        jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":text}]}))
+                    } else if mode == "path" {
+                        if entity.is_empty() {
+                            return jsonrpc_err(&id, -32002, "kg_query mode='path' requires 'entity'");
+                        }
+                        let target = a["target"].as_str().unwrap_or("");
+                        if target.is_empty() {
+                            return jsonrpc_err(&id, -32002, "kg_query mode='path' requires 'target'");
+                        }
+                        match store.graph.query_path(entity, target) {
+                            Some(path) => {
+                                let text = format!("Shortest path: {}", path.join(" → "));
+                                jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":text}]}))
+                            }
+                            None => jsonrpc_err(&id, -32000, &format!("No path found between '{}' and '{}'", entity, target)),
+                        }
+                    } else {
+                        jsonrpc_err(&id, -32002, &format!("kg_query: unknown mode '{}' (try 'neighbors' or 'path')", mode))
+                    }
+                }
+                "kg_triple_add" => {
+                    let subject = a["subject"].as_str().unwrap_or("");
+                    let predicate = a["predicate"].as_str().unwrap_or("");
+                    let object = a["object"].as_str().unwrap_or("");
+                    if subject.is_empty() || predicate.is_empty() || object.is_empty() {
+                        return jsonrpc_err(&id, -32002, "kg_triple_add requires subject, predicate, and object");
+                    }
+                    let confidence = a["confidence"].as_f64().unwrap_or(1.0) as f32;
+                    let source_memory_id = a["source_memory_id"].as_str().map(|s| s.to_string());
+                    let project = a["project"].as_str().map(|s| s.to_string());
+                    match store.add_triple(subject, predicate, object, confidence, source_memory_id, project).await {
+                        Ok(triple_id) => jsonrpc_ok(&id, serde_json::json!({"content":[{"type":"text","text":format!("Triple added: {} --[{}]--> {} (id={})", subject, predicate, object, triple_id)}]})),
+                        Err(e) => jsonrpc_err(&id, -32000, &format!("Failed to add triple: {}", e)),
                     }
                 }
                 "memory_stats" => match store.stats().await {
