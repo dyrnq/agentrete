@@ -12,6 +12,22 @@ env:
   BINARY_NAME: agentrete
 
 jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: test-release-cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Run tests
+        run: cargo test
+
   build:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -133,17 +149,17 @@ jobs:
         shell: bash
         run: |
           mkdir -p npm/bin
-          for artifact in artifacts/*/; do
-            platform="${artifact#artifacts/}"
-            platform="${platform%/}"
-            binary=$(ls "$artifact" 2>/dev/null | head -1)
-            if [ -n "$binary" ]; then
+          for dir in artifacts/*/; do
+            platform=$(basename "$dir")
+            # Find the actual binary file (skip .sha256 files)
+            for f in "$dir"/*; do
+              case "$f" in *.sha256) continue ;; esac
               binname="agentrete-${platform}"
               case "$platform" in
                 *windows*) binname="${binname}.exe" ;;
               esac
-              cp "$artifact/$binary" "npm/bin/$binname" 2>/dev/null || true
-            fi
+              cp "$f" "npm/bin/$binname" 2>/dev/null || true
+            done
           done
           chmod +x npm/bin/* 2>/dev/null || true
           ls -la npm/bin/
