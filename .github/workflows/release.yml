@@ -129,83 +129,33 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org/
 
-      - name: Download linux binary for npm
+      - name: Download platform binaries for npm
         shell: bash
         run: |
           mkdir -p npm/bin
-          cp artifacts/x86_64-unknown-linux-gnu/${{ env.BINARY_NAME }}-*-x86_64-unknown-linux-gnu npm/bin/agentrete-linux-x64
-          cp artifacts/x86_64-apple-darwin/${{ env.BINARY_NAME }}-*-x86_64-apple-darwin npm/bin/agentrete-darwin-x64 || true
-          cp artifacts/aarch64-apple-darwin/${{ env.BINARY_NAME }}-*-aarch64-apple-darwin npm/bin/agentrete-darwin-arm64 || true
-          cp artifacts/x86_64-pc-windows-msvc/${{ env.BINARY_NAME }}-*-x86_64-pc-windows-msvc.exe npm/bin/agentrete-win-x64.exe || true
+          for artifact in artifacts/*/; do
+            platform="${artifact#artifacts/}"
+            platform="${platform%/}"
+            binary=$(ls "$artifact" 2>/dev/null | head -1)
+            if [ -n "$binary" ]; then
+              binname="agentrete-${platform}"
+              case "$platform" in
+                *windows*) binname="${binname}.exe" ;;
+              esac
+              cp "$artifact/$binary" "npm/bin/$binname" 2>/dev/null || true
+            fi
+          done
           chmod +x npm/bin/* 2>/dev/null || true
           ls -la npm/bin/
 
-      - name: Create npm package.json
-        shell: bash
+      - name: Update npm version from tag
         run: |
-          cat > npm/package.json << 'PKGJSON'
-          {
-            "name": "agentrete",
-            "version": "${{ github.ref_name }}",
-            "description": "Local-first persistent memory engine for AI coding agents",
-            "license": "MIT",
-            "bin": {
-              "agentrete": "./install.js"
-            },
-            "files": [
-              "install.js",
-              "bin/"
-            ],
-            "repository": {
-              "type": "git",
-              "url": "https://github.com/dyrnq/agentrete"
-            },
-            "keywords": ["mcp", "memory", "ai", "codex", "claude", "agent"]
-          }
-          PKGJSON
-          # Strip leading 'v' from version
-          VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
-          sed -i "s/\${{ github.ref_name }}/$VERSION/" npm/package.json
-
-      - name: Create npm install.js
-        shell: bash
-        run: |
-          cat > npm/install.js << 'INSTALLJS'
-          #!/usr/bin/env node
-          const { execSync } = require('child_process');
-          const fs = require('fs');
-          const path = require('path');
-
-          const platform = process.platform;
-          const arch = process.arch;
-
-          const map = {
-            'linux-x64': 'agentrete-linux-x64',
-            'darwin-x64': 'agentrete-darwin-x64',
-            'darwin-arm64': 'agentrete-darwin-arm64',
-            'win32-x64': 'agentrete-win-x64.exe',
-          };
-
-          const key = `${platform}-${arch}`;
-          const binName = map[key];
-
-          if (!binName) {
-            console.error(`Unsupported platform: ${key}`);
-            process.exit(1);
-          }
-
-          const src = path.join(__dirname, 'bin', binName);
-          const destDir = path.join(process.env.HOME || process.env.USERPROFILE, '.local', 'bin');
-          const dest = path.join(destDir, process.platform === 'win32' ? 'agentrete.exe' : 'agentrete');
-
-          fs.mkdirSync(destDir, { recursive: true });
-          fs.copyFileSync(src, dest);
-          fs.chmodSync(dest, 0o755);
-
-          console.log(`agentrete installed to ${dest}`);
-          console.log('Run "agentrete setup" to configure AI tools.');
-          INSTALLJS
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd npm
+          # Update version in package.json
+          node -e "const p=require('./package.json'); p.version='$VERSION'; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)+'
+')"
+          echo "npm package version: $(node -e "console.log(require('./package.json').version)")
 
       - name: Check npm version
         id: npm-check

@@ -336,27 +336,62 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
     }
 
     match cli.command {
-        Commands::Save { ref content, ref r#type, ref tags, ref files, ref project } => {
-            cli::memory::cmd_save(&store, content.clone(), r#type.clone(), tags.clone(), files.clone(), project.clone()).await?;
+        Commands::Save {
+            ref content,
+            ref r#type,
+            ref tags,
+            ref files,
+            ref project,
+        } => {
+            cli::memory::cmd_save(
+                &store,
+                content.clone(),
+                r#type.clone(),
+                tags.clone(),
+                files.clone(),
+                project.clone(),
+            )
+            .await?;
         }
-        Commands::Search { ref query, limit, ref r#type } => {
+        Commands::Search {
+            ref query,
+            limit,
+            ref r#type,
+        } => {
             cli::memory::cmd_search(&store, query.clone(), limit, r#type.clone()).await?;
         }
-        Commands::List { limit } => { cli::memory::cmd_list(&store, limit).await?; }
-        Commands::Stats => { cli::memory::cmd_stats(&store).await?; }
-        Commands::Init => { cli::scan::cmd_init(&store).await?; }
-        Commands::Scan { ref path } => { cli::scan::cmd_scan(&store, path.clone().unwrap_or_default()).await?; }
-        Commands::Doctor => { cli::scan::cmd_doctor(&store).await?; }
-        Commands::Forget { ref id } => { cli::memory::cmd_forget(&store, id.clone()).await?; }
-        Commands::Wipe { force } => { cli::memory::cmd_wipe(&store, force).await?; }
-        Commands::Seed => { cli::seed::cmd_seed(&store).await?; }
-        Commands::Daemon { .. } | Commands::Setup | Commands::InstallModel { .. } | Commands::Mcp { .. } => {
+        Commands::List { limit } => {
+            cli::memory::cmd_list(&store, limit).await?;
+        }
+        Commands::Stats => {
+            cli::memory::cmd_stats(&store).await?;
+        }
+        Commands::Init => {
+            cli::scan::cmd_init(&store).await?;
+        }
+        Commands::Scan { ref path } => {
+            cli::scan::cmd_scan(&store, path.clone().unwrap_or_default()).await?;
+        }
+        Commands::Doctor => {
+            cli::scan::cmd_doctor(&store).await?;
+        }
+        Commands::Forget { ref id } => {
+            cli::memory::cmd_forget(&store, id.clone()).await?;
+        }
+        Commands::Wipe { force } => {
+            cli::memory::cmd_wipe(&store, force).await?;
+        }
+        Commands::Seed => {
+            cli::seed::cmd_seed(&store).await?;
+        }
+        Commands::Daemon { .. }
+        | Commands::Setup
+        | Commands::InstallModel { .. }
+        | Commands::Mcp { .. } => {
             unreachable!("handled before store open")
         }
     }
     Ok(())
-
-
 }
 
 fn ask_confirmation(prompt: &str) -> bool {

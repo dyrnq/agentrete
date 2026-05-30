@@ -1,0 +1,25 @@
+{
+  "name": "agentrete",
+  "version": "0.1.0",
+  "description": "Local-first persistent memory engine for AI coding agents",
+  "license": "MIT",
+  "bin": {
+    "agentrete": "./agentrete"
+  },
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "files": [
+    "agentrete",
+    "agentrete.js",
+    "postinstall.js",
+    "bin/"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dyrnq/agentrete.git"
+  },
+  "keywords": ["mcp", "memory", "ai", "codex", "agent"],
+  "os": ["darwin", "linux", "win32"],
+  "cpu": ["x64", "arm64"]
+}
