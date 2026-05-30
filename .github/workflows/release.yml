@@ -168,9 +168,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           cd npm
-          # Update version in package.json
-          node -e "const p=require('./package.json'); p.version='$VERSION'; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)+'
-')"
+          node -e "const p=require('./package.json');p.version='$VERSION'; require('fs').writeFileSync('package.json', JSON.stringify(p,null,2)+'\n')"
           echo "npm package version: $(node -e "console.log(require('./package.json').version)")
 
       - name: Check npm version
