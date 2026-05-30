@@ -38,7 +38,7 @@ Embed:  10 vectors in 46ms
 Search: RRF merged 3 results, <100ms
 Accuracy:
   "code modification"     → apply_patch rules     ✅
-  "database lock"         → DuckDB WAL pattern      ✅
+  "database lock"         → SQLite WAL mode          ✅
   "修改源代码" (Chinese)  → apply_patch rules      ✅ cross-lingual
 ```
 
