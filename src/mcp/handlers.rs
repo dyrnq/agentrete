@@ -8,7 +8,7 @@ use super::v2025_11;
 pub(crate) fn tools_list() -> Value {
     serde_json::json!({"tools":[
         {"name":"memory_search","description":"Search","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"number"}},"required":["query"]}},
-        {"name":"memory_save","description":"Save","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"type":{"type":"string"},"tags":{"type":"string"}},"required":["content"]}},
+        {"name":"memory_save","description":"Save","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"type":{"type":"string"},"tags":{"type":"string"},"source_file":{"type":"string"}},"required":["content"]}},
         {"name":"memory_list","description":"List memories, optionally filtered by type","inputSchema":{"type":"object","properties":{"limit":{"type":"number"},"type":{"type":"string"}},"required":[]}},
         {"name":"memory_forget","description":"Delete","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
         {"name":"memory_stats","description":"Stats","inputSchema":{"type":"object","properties":{},"required":[]}},
@@ -70,6 +70,7 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                             tags,
                             files: None,
                             project: None,
+                            source_file: a["source_file"].as_str().map(|s| s.to_string()),
                         })
                         .await
                     {
@@ -89,11 +90,12 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                                 .into_iter()
                                 .map(|x| {
                                     serde_json::json!({"type":"text","text":format!(
-                                        "[{}] {} (score={:.2}) id={}",
+                                        "[{}] {} (score={:.2}) id={}{}",
                                         x.memory_type.as_deref().unwrap_or("-"),
                                         x.content,
                                         x.score,
-                                        x.id
+                                        x.id,
+                                        if let Some(ref f) = x.source_file { format!(" src:{}", f) } else { String::new() }
                                     )})
                                 })
                                 .collect();

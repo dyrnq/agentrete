@@ -65,6 +65,7 @@ fn rrf_merge(
                 tags: r.tags.clone(),
                 files: r.files.clone(),
                 project: r.project.clone(),
+                source_file: r.source_file.clone(),
                 importance: r.importance,
                 score,
                 created_at: r.created_at.clone(),
@@ -152,7 +153,10 @@ impl Store {
 
     async fn initialize(&self) -> Result<()> {
         sqlx::query("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY, migrated_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
-        sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, importance REAL DEFAULT 0.5, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT)").execute(&self.pool).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, source_file TEXT, importance REAL DEFAULT 0.5, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT)").execute(&self.pool).await?;
+        let _ = sqlx::query("ALTER TABLE memories ADD COLUMN source_file TEXT")
+            .execute(&self.pool)
+            .await;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_embed_null ON memories(embedding) WHERE embedding IS NULL").execute(&self.pool).await?;
         sqlx::query("CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content, content_rowid='rowid', tokenize='unicode61')").execute(&self.pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, data TEXT, metadata TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
@@ -171,8 +175,8 @@ impl Store {
             .files
             .as_ref()
             .map(|t| serde_json::to_string(t).unwrap_or_default());
-        sqlx::query("INSERT INTO memories (id,type,content,tags,files,project,importance,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)")
-            .bind(&id).bind(&input.memory_type).bind(&input.content).bind(&tags).bind(&files).bind(&input.project).bind(0.5).bind(&now)
+        sqlx::query("INSERT INTO memories (id,type,content,tags,files,project,source_file,importance,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)")
+            .bind(&id).bind(&input.memory_type).bind(&input.content).bind(&tags).bind(&files).bind(&input.project).bind(&input.source_file).bind(0.5).bind(&now)
             .execute(&self.pool).await?;
         let rowid: i64 = sqlx::query_scalar("SELECT rowid FROM memories WHERE id=?1")
             .bind(&id)
@@ -214,9 +218,9 @@ impl Store {
 
         #[allow(clippy::type_complexity)]
         // KNN via vec0 virtual table
-        let rows: Vec<(String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<f64>, Option<String>, f64)> =
+        let rows: Vec<(String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<f64>, Option<String>, f64)> =
             sqlx::query_as(
-                "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid                  WHERE v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
+                "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid                  WHERE v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
             )
             .bind(&json_vec)
             .bind(lim)
@@ -227,7 +231,18 @@ impl Store {
         Ok(rows
             .into_iter()
             .map(
-                |(id, mt, content, tags, files, project, importance, created_at, distance)| {
+                |(
+                    id,
+                    mt,
+                    content,
+                    tags,
+                    files,
+                    project,
+                    source_file,
+                    importance,
+                    created_at,
+                    distance,
+                )| {
                     SearchResult {
                         id,
                         memory_type: mt,
@@ -235,8 +250,9 @@ impl Store {
                         tags: parse_json(&tags),
                         files: parse_json(&files),
                         project,
+                        source_file,
                         importance: importance.unwrap_or(0.5),
-                        score: (1.0 - distance.powi(2) / 2.0).max(0.0),
+                        score: (1.0_f64 - distance.powi(2) / 2.0).max(0.0),
                         created_at: created_at.unwrap_or_default(),
                         embedding: None,
                     }
@@ -312,10 +328,10 @@ impl Store {
     ) -> Result<Vec<SearchResult>> {
         let lim = limit.min(100) as i64;
         let rows: Vec<SearchRow> = if let Some(t) = memory_type {
-            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 ORDER BY rank LIMIT ?3")
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 ORDER BY rank LIMIT ?3")
                 .bind(query).bind(t).bind(lim).fetch_all(&self.pool).await?
         } else {
-            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2")
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2")
                 .bind(query).bind(lim).fetch_all(&self.pool).await?
         };
         Ok(rows
@@ -327,6 +343,7 @@ impl Store {
                 tags: parse_json(&r.tags),
                 files: parse_json(&r.files),
                 project: r.project,
+                source_file: r.source_file.clone(),
                 importance: r.importance.unwrap_or(0.5),
                 score: 0.5,
                 created_at: r.created_at.unwrap_or_default(),
@@ -349,10 +366,10 @@ impl Store {
         // Step 2: FTS5 recall (wider window for reranking)
         let recall_limit = (limit as i64 * 3).min(100);
         let rows: Vec<SearchRow> = if let Some(t) = memory_type {
-            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 ORDER BY rank LIMIT ?3")
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 ORDER BY rank LIMIT ?3")
                 .bind(query).bind(t).bind(recall_limit).fetch_all(&self.pool).await?
         } else {
-            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2")
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 ORDER BY rank LIMIT ?2")
                 .bind(query).bind(recall_limit).fetch_all(&self.pool).await?
         };
 
@@ -371,6 +388,7 @@ impl Store {
                         tags: parse_json(&r.tags),
                         files: parse_json(&r.files),
                         project: r.project,
+                        source_file: r.source_file.clone(),
                         importance: r.importance.unwrap_or(0.5),
                         score: cosine as f64,
                         created_at: r.created_at.unwrap_or_default(),
@@ -387,6 +405,7 @@ impl Store {
                 tags: parse_json(&r.tags),
                 files: parse_json(&r.files),
                 project: r.project,
+                source_file: r.source_file.clone(),
                 importance: r.importance.unwrap_or(0.5),
                 score: 0.5,
                 created_at: r.created_at.unwrap_or_default(),
@@ -412,10 +431,10 @@ impl Store {
 
     pub async fn list(&self, limit: u8, memory_type: Option<&str>) -> Result<Vec<Memory>> {
         let rows: Vec<MemoryRow> = if let Some(t) = memory_type {
-            sqlx::query_as("SELECT id,type,content,tags,files,project,importance,created_at,updated_at FROM memories WHERE type=?1 ORDER BY created_at DESC LIMIT ?2")
+            sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories WHERE type=?1 ORDER BY created_at DESC LIMIT ?2")
                 .bind(t).bind(limit.min(100) as i64).fetch_all(&self.pool).await?
         } else {
-            sqlx::query_as("SELECT id,type,content,tags,files,project,importance,created_at,updated_at FROM memories ORDER BY created_at DESC LIMIT ?1")
+            sqlx::query_as("SELECT id,type,content,tags,files,project,source_file,importance,created_at,updated_at FROM memories ORDER BY created_at DESC LIMIT ?1")
                 .bind(limit.min(100) as i64).fetch_all(&self.pool).await?
         };
         Ok(rows
@@ -427,6 +446,7 @@ impl Store {
                 tags: parse_json(&r.tags),
                 files: parse_json(&r.files),
                 project: r.project,
+                source_file: r.source_file.clone(),
                 importance: r.importance.unwrap_or(0.5),
                 created_at: r.created_at.unwrap_or_default(),
                 updated_at: r.updated_at.unwrap_or_default(),
@@ -710,6 +730,7 @@ struct SearchRow {
     tags: Option<String>,
     files: Option<String>,
     project: Option<String>,
+    source_file: Option<String>,
     importance: Option<f64>,
     created_at: Option<String>,
     embedding: Option<Vec<u8>>,
@@ -723,6 +744,7 @@ struct MemoryRow {
     tags: Option<String>,
     files: Option<String>,
     project: Option<String>,
+    source_file: Option<String>,
     importance: Option<f64>,
     created_at: Option<String>,
     updated_at: Option<String>,

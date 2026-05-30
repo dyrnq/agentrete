@@ -313,6 +313,7 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
                     tags: tags_vec,
                     files: files_vec,
                     project,
+                    source_file: None,
                 })
                 .await?;
             println!("Saved memory: {}", id);
@@ -420,6 +421,7 @@ Status: ✅ agentrete is healthy"
                         tags: tags_vec,
                         files: None,
                         project: None,
+                        source_file: None,
                     })
                     .await?;
                 nc += 1;

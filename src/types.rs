@@ -13,6 +13,7 @@ pub struct Memory {
     pub files: Option<Vec<String>>,
     pub project: Option<String>,
     pub importance: f64,
+    pub source_file: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -25,6 +26,7 @@ pub struct NewMemory {
     pub tags: Option<Vec<String>>,
     pub files: Option<Vec<String>>,
     pub project: Option<String>,
+    pub source_file: Option<String>,
 }
 
 /// Search result with relevance score.
@@ -37,6 +39,7 @@ pub struct SearchResult {
     pub files: Option<Vec<String>>,
     pub project: Option<String>,
     pub importance: f64,
+    pub source_file: Option<String>,
     pub score: f64,
     pub created_at: String,
     /// Raw embedding BLOB for on-the-fly cosine computation
