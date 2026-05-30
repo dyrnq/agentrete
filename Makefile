@@ -4,8 +4,8 @@
 CARGO      ?= cargo
 TEST_CFG   ?= /tmp/test-m2v.toml
 TEST_DB    ?= /tmp/test-db
-M2V_256    ?= /home/bill/.cache/model2vec/bge-small-256d
-M2V_512    ?= /home/bill/.cache/model2vec/bge-small-512d
+M2V_256    ?= $(HOME)/.cache/model2vec/bge-small-256d
+M2V_512    ?= $(HOME)/.cache/model2vec/bge-small-512d
 PORT       ?= 9092
 
 .PHONY: all build check lint test clean run-mcp run-scan seed \
@@ -65,8 +65,14 @@ _check-server:
 
 _phase-3-4:
 	@echo "--- Phase 3+4: Startup + Initialize ---"
-	$(CARGO) run --bin agentrete -- -c $(TEST_CFG) mcp -p $(PORT) &
-	@sleep 5
+	-systemctl --user stop agentrete.service 2>/dev/null; sleep 1
+	@sed -e "s|PATH_TO_BINARY|$(CURDIR)/target/debug/agentrete|" \
+	  -e "s|PATH_TO_CONFIG|$(TEST_CFG)|" \
+	  -e "s|9092|$(PORT)|" \
+	  docs/agentrete.service.in > ~/.config/systemd/user/agentrete.service
+	-systemctl --user daemon-reload 2>/dev/null
+	systemctl --user restart agentrete.service
+	@sleep 4
 	@curl -s http://127.0.0.1:$(PORT)/ | jq '.status' | grep -q '"ok"' \
 	  || (echo "FAIL: health"; exit 1)
 	@curl -s http://127.0.0.1:$(PORT)/ \
@@ -109,7 +115,13 @@ _phase-6:
 
 _phase-7:
 	@echo "--- Phase 7: Re-Embed ---"
-	$(CARGO) run --bin agentrete -- -c $(TEST_CFG) mcp -p $(PORT) &
+	-systemctl --user stop agentrete.service 2>/dev/null; sleep 1
+	@sed -e "s|PATH_TO_BINARY|$(CURDIR)/target/debug/agentrete|" \
+	  -e "s|PATH_TO_CONFIG|$(TEST_CFG)|" \
+	  -e "s|9092|$(PORT)|" \
+	  docs/agentrete.service.in > ~/.config/systemd/user/agentrete.service
+	-systemctl --user daemon-reload 2>/dev/null
+	systemctl --user restart agentrete.service
 	@sleep 5
 	python3 /tmp/insert_10k.py $(TEST_DB)/memory.db
 	@sleep 20
