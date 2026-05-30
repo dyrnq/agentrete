@@ -148,6 +148,41 @@ _phase-8-9:
 	  || (echo "FAIL: server crashed"; exit 1)
 	@echo "PASS: Phase 8+9"
 
+# ─── sqlite-vec Extension Download ──────────────────────────────
+
+VEC_VERSION ?= 0.1.9
+VEC_REPO   ?= asg017/sqlite-vec
+EXT_DIR    ?= ext
+
+# Download and extract sqlite-vec loadable extensions for all platforms
+# Download sqlite-vec loadable extensions for all platforms
+
+
+
+# Upgrade to latest version
+# Download sqlite-vec loadable extensions for all platforms
+download-ext:
+	@echo "=== Downloading sqlite-vec v$(VEC_VERSION) ==="
+	@mkdir -p $(EXT_DIR)
+	curl -sL -o /tmp/vec0-linux-x86_64.tar.gz "https://github.com/$(VEC_REPO)/releases/download/v$(VEC_VERSION)/sqlite-vec-$(VEC_VERSION)-loadable-linux-x86_64.tar.gz"
+	curl -sL -o /tmp/vec0-linux-aarch64.tar.gz "https://github.com/$(VEC_REPO)/releases/download/v$(VEC_VERSION)/sqlite-vec-$(VEC_VERSION)-loadable-linux-aarch64.tar.gz"
+	curl -sL -o /tmp/vec0-macos-x86_64.tar.gz "https://github.com/$(VEC_REPO)/releases/download/v$(VEC_VERSION)/sqlite-vec-$(VEC_VERSION)-loadable-macos-x86_64.tar.gz"
+	curl -sL -o /tmp/vec0-macos-aarch64.tar.gz "https://github.com/$(VEC_REPO)/releases/download/v$(VEC_VERSION)/sqlite-vec-$(VEC_VERSION)-loadable-macos-aarch64.tar.gz"
+	curl -sL -o /tmp/vec0-windows-x86_64.tar.gz "https://github.com/$(VEC_REPO)/releases/download/v$(VEC_VERSION)/sqlite-vec-$(VEC_VERSION)-loadable-windows-x86_64.tar.gz"
+	cd /tmp && tar xzf vec0-linux-x86_64.tar.gz && cp vec0 $(EXT_DIR)/vec0-linux-x86_64.so 2>/dev/null || true
+	cd /tmp && tar xzf vec0-linux-aarch64.tar.gz && cp vec0 $(EXT_DIR)/vec0-linux-aarch64.so 2>/dev/null || true
+	cd /tmp && tar xzf vec0-macos-x86_64.tar.gz && cp vec0 $(EXT_DIR)/vec0-macos-x86_64.dylib 2>/dev/null || true
+	cd /tmp && tar xzf vec0-macos-aarch64.tar.gz && cp vec0 $(EXT_DIR)/vec0-macos-aarch64.dylib 2>/dev/null || true
+	cd /tmp && tar xzf vec0-windows-x86_64.tar.gz && cp vec0.dll $(EXT_DIR)/vec0-windows-x86_64.dll 2>/dev/null || true
+	@echo "Done. Extensions in $(EXT_DIR)/"
+	ls -la $(EXT_DIR)/
+
+download-ext-upgrade:
+	@echo "Fetching latest version..."
+	 LATEST=$$(curl -sL "https://api.github.com/repos/$(VEC_REPO)/releases/latest" | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))"); \\
+	$(MAKE) download-ext VEC_VERSION=$$LATEST
+
+
 # ─── Run ────────────────────────────────────────────────────────
 
 run-mcp:
@@ -217,8 +252,11 @@ help:
 	@echo "  make test-reembed      Phase 7 only"
 	@echo "  make test-kg           Phase 6 only"
 	@echo ""
+	@echo "Extensions:"
+	@echo "  make download-ext           Download sqlite-vec for all platforms"
+	@echo "  make download-ext-upgrade   Upgrade to latest version"
+	@echo ""
 	@echo "Run:"
-	@echo "  make run-mcp       Start MCP server"
 	@echo "  make run-scan      SCAN_PATH=/path make run-scan"
 	@echo "  make seed          Seed community rules"
 	@echo "  make stats/make list"
