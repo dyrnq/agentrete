@@ -64,7 +64,7 @@ mod tests {
     fn test_ollama_embed_real() {
         let client = reqwest::blocking::Client::new();
         if client
-            .get("http://192.168.6.9:11434/api/tags")
+            .get("http://localhost:11434/api/tags")
             .send()
             .is_err()
         {
@@ -74,7 +74,7 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let emb = OllamaEmbedder::new(
-            "http://192.168.6.9:11434",
+            "http://localhost:11434",
             "granite-embedding:278m",
             reqwest::Client::new(),
         );
@@ -88,7 +88,7 @@ mod tests {
     fn test_nomic_embed_real() {
         let client = reqwest::blocking::Client::new();
         if client
-            .get("http://192.168.6.9:11434/api/tags")
+            .get("http://localhost:11434/api/tags")
             .send()
             .is_err()
         {
@@ -97,7 +97,7 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let emb = OllamaEmbedder::new(
-            "http://192.168.6.9:11434",
+            "http://localhost:11434",
             "nomic-embed-text:latest",
             reqwest::Client::new(),
         );

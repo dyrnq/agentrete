@@ -41,7 +41,7 @@ const SEED_RULES: &[(&str, &str, &str)] = &[
         "coding,CRITICAL",
     ),
     (
-        "Doc Paths: Never use /home/bill or 192.168.x.x in documentation",
+        "Doc Paths: Never use private paths (like ~ or 192.168.x.x) in documentation",
         "rule",
         "coding,docs,CRITICAL",
     ),

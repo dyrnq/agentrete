@@ -23,7 +23,7 @@ backend = "model2vec"
 [embedding.model2vec]
 model = "BAAI/bge-small-zh-v1.5"
 dims = 256
-model2vec_path = "/home/bill/.cache/model2vec/bge-small-256d"
+model2vec_path = "~/.cache/model2vec/bge-small-256d"
 
 [knowledge_graph]
 enabled = true
@@ -89,7 +89,7 @@ curl -s http://127.0.0.1:9092/
 
 **Expected**: `{"service":"agentrete","status":"ok","version":"..."}`  
 **Log check**: `sqlite-vec extension extracted to /tmp/agentrete/vec0-linux-x86_64.so`  
-**Log check**: `Model2Vec loaded: /home/bill/.cache/model2vec/bge-small-256d (256d)`  
+**Log check**: `Model2Vec loaded: ~/.cache/model2vec/bge-small-256d (256d)`  
 **Log check**: `kg: built graph (N nodes, M edges)`  
 **Log check** (if sg not installed): warning about missing ast-grep
 
@@ -304,7 +304,7 @@ backend = "model2vec"
 [embedding.model2vec]
 model = "BAAI/bge-small-zh-v1.5"
 dims = 512
-model2vec_path = "/home/bill/.cache/model2vec/bge-small-512d"
+model2vec_path = "~/.cache/model2vec/bge-small-512d"
 
 [knowledge_graph]
 enabled = true

@@ -1,13 +1,6 @@
 //! SQLite storage via sqlx (async, Send+Sync, connection pool).
-//!
-//! Sub-modules:
-//! - `schema`:  table/index/trigger initialization, vec0 virtual table, FTS rebuild
-//! - `search`:  RRF fusion, vec0 KNN, FTS5 BM25, cosine rerank, row types, vector math
-//! - `kg`:      codebase scanning, git history import, SPO triple CRUD
 
-mod kg;
-mod schema;
-pub(crate) mod search;
+#![allow(dead_code)]
 
 use anyhow::Result;
 use chrono::Utc;
@@ -25,15 +18,13 @@ use crate::types::{DbStats, Memory, NewMemory, SearchResult};
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 // Embedded sqlite-vec extension for the current platform.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const VEC_EXT_BYTES: &[u8] = include_bytes!("../../ext/vec0-linux-x86_64.so");
+const VEC_EXT_BYTES: &[u8] = include_bytes!("../ext/vec0-linux-x86_64.so");
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 const VEC_EXT_BYTES: &[u8] = &[];
 
 // ─── Tunable constants (overridable via config) ──────────────────────────────
-
-pub(crate) use search::{
-    bytes_to_f32_vec, cosine_similarity, normalize_l2, parse_json, MemoryRow, SearchRow, MAX_LIMIT,
-};
+const MAX_LIMIT: u8 = 100;
+const RECALL_MULTIPLIER: u8 = 3;
 
 #[derive(Clone)]
 pub struct Store {
@@ -56,6 +47,49 @@ pub struct Store {
 /// Reciprocal Rank Fusion: merge vec0 KNN and FTS5 BM25 ranked lists.
 /// RRF score = sum(1 / (K + rank)) across lists, with K=60.
 /// Returns top-k results sorted by RRF score descending.
+fn rrf_merge(
+    vec_results: Vec<SearchResult>,
+    fts_results: Vec<SearchResult>,
+    k: usize,
+    rrf_k: f64,
+) -> Vec<SearchResult> {
+    use std::collections::HashMap;
+
+    let mut scores: HashMap<&str, f64> = HashMap::new();
+    let mut data: HashMap<&str, &SearchResult> = HashMap::new();
+
+    for (rank, r) in vec_results.iter().enumerate() {
+        *scores.entry(r.id.as_str()).or_default() += 1.0 / (rrf_k + rank as f64 + 1.0);
+        data.entry(r.id.as_str()).or_insert(r);
+    }
+    for (rank, r) in fts_results.iter().enumerate() {
+        *scores.entry(r.id.as_str()).or_default() += 1.0 / (rrf_k + rank as f64 + 1.0);
+        data.entry(r.id.as_str()).or_insert(r);
+    }
+
+    let mut merged: Vec<(&str, f64)> = scores.into_iter().collect();
+    merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    merged
+        .into_iter()
+        .take(k)
+        .filter_map(|(id, score)| {
+            data.get(id).map(|r| SearchResult {
+                id: r.id.clone(),
+                memory_type: r.memory_type.clone(),
+                content: r.content.clone(),
+                tags: r.tags.clone(),
+                files: r.files.clone(),
+                project: r.project.clone(),
+                source_file: r.source_file.clone(),
+                importance: r.importance,
+                score,
+                created_at: r.created_at.clone(),
+                embedding: r.embedding.clone(),
+            })
+        })
+        .collect()
+}
 
 impl Store {
     pub async fn open(cfg: &crate::config::Config, embedder: Option<Embedder>) -> Result<Self> {
@@ -154,7 +188,54 @@ impl Store {
     }
 
     async fn initialize(&self) -> Result<()> {
-        schema::initialize(&self.pool).await
+        sqlx::query("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER PRIMARY KEY, migrated_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, type TEXT, content TEXT NOT NULL, tags TEXT, files TEXT, project TEXT, source_file TEXT, importance INTEGER DEFAULT 3, embedding BLOB, embedding_model TEXT, embedding_dims INTEGER, created_at TEXT, updated_at TEXT, deleted_at TEXT)").execute(&self.pool).await?;
+        let _ = sqlx::query("ALTER TABLE memories ADD COLUMN source_file TEXT")
+            .execute(&self.pool)
+            .await;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_embed_null ON memories(embedding) WHERE embedding IS NULL").execute(&self.pool).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_content_type ON memories(content, type) WHERE deleted_at IS NULL")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content, content_rowid='rowid', tokenize='unicode61')").execute(&self.pool).await?;
+        // FTS auto-sync: INSERT trigger
+        sqlx::query("CREATE TRIGGER IF NOT EXISTS memories_fts_ai AFTER INSERT ON memories WHEN new.deleted_at IS NULL BEGIN INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END;").execute(&self.pool).await?;
+        // FTS auto-sync: soft-delete removes from FTS
+        sqlx::query("CREATE TRIGGER IF NOT EXISTS memories_fts_au AFTER UPDATE OF deleted_at ON memories WHEN new.deleted_at IS NOT NULL AND old.deleted_at IS NULL BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); END;").execute(&self.pool).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, data TEXT, metadata TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY, content TEXT, tool_name TEXT, session_id TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
+        // Knowledge Graph triples (optional, only created if config enables it)
+        let _ = sqlx::query("CREATE TABLE IF NOT EXISTS kg_triples (id TEXT PRIMARY KEY, subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL, confidence REAL DEFAULT 1.0, source_memory_id TEXT, project TEXT, created_at TEXT NOT NULL)").execute(&self.pool).await;
+        let _ =
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_subject ON kg_triples(subject)")
+                .execute(&self.pool)
+                .await;
+        let _ =
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_object ON kg_triples(object)")
+                .execute(&self.pool)
+                .await;
+        let _ = sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_kg_triples_predicate ON kg_triples(predicate)",
+        )
+        .execute(&self.pool)
+        .await;
+        let _ = sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_kg_triples_memory ON kg_triples(source_memory_id)",
+        )
+        .execute(&self.pool)
+        .await;
+        let _ =
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_project ON kg_triples(project)")
+                .execute(&self.pool)
+                .await;
+        let _ = sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_triples_spo ON kg_triples(subject, predicate, object, project)").execute(&self.pool).await;
+        Ok(())
     }
 
     /// Add a SPO triple to the knowledge graph.
@@ -168,31 +249,80 @@ impl Store {
         source_memory_id: Option<String>,
         project: Option<String>,
     ) -> Result<String> {
-        kg::add_triple(
-            &self.pool,
-            &self.graph,
-            subject,
-            predicate,
-            object,
-            confidence,
-            source_memory_id,
-            project,
-        )
-        .await
+        let id = format!("triple_{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,source_memory_id,project,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)")
+            .bind(&id).bind(subject).bind(predicate).bind(object).bind(confidence).bind(&source_memory_id).bind(&project).bind(&now)
+            .execute(&self.pool).await?;
+        self.graph
+            .add_triple_local(subject, predicate, object, confidence, source_memory_id);
+        Ok(id)
     }
 
     /// Scan a codebase directory with tree-sitter and import results into KG.
     pub async fn scan_codebase(&self, root: &std::path::Path) -> Result<(usize, usize)> {
-        let result = kg::scan_codebase(&self.pool, &self.graph, root).await?;
+        let (symbols, relations) = crate::knowledge_graph::scanner::scan_directory(root)?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let project = detect_project_for_scan(root);
+
+        for sym in &symbols {
+            let id = format!("node_{}", uuid::Uuid::new_v4());
+            let _ = sqlx::query(
+                "INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'label',?3,1.0,?4,?5)"
+            )
+            .bind(&id).bind(&sym.name).bind(&sym.kind).bind(&project).bind(&now)
+            .execute(&self.pool).await;
+        }
+
+        for rel in &relations {
+            let id = format!("rel_{}", uuid::Uuid::new_v4());
+            let _ = sqlx::query(
+                "INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6)"
+            )
+            .bind(&id).bind(&rel.source).bind(&rel.relation).bind(&rel.target).bind(&project).bind(&now)
+            .execute(&self.pool).await;
+        }
+
+        // Sync petgraph
+        // Sync all symbols and relations
+        for sym in &symbols {
+            self.graph
+                .add_triple_local(&sym.name, "label", &sym.kind, 1.0, None);
+        }
+        for rel in &relations {
+            self.graph
+                .add_triple_local(&rel.source, &rel.relation, &rel.target, 1.0, None);
+        }
+
         if let Ok(mut r) = self.scan_result.lock() {
             *r = Some(format!(
                 "kg_scan: {} symbols, {} relations",
-                result.0, result.1
+                symbols.len(),
+                relations.len()
             ));
         }
-        Ok(result)
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_ok()
+        {
+            if let Some(ref git_root) = detect_project_git_root(root) {
+                if let Err(e) = self.scan_git_history(git_root, &project).await {
+                    log::warn!("kg_scan: git history scan failed: {e}");
+                }
+            }
+        }
+        log::info!(
+            "kg_scan: {} symbols, {} relations from {:?}",
+            symbols.len(),
+            relations.len(),
+            root
+        );
+        Ok((symbols.len(), relations.len()))
     }
 
+    /// Start file watcher: auto-scan on code changes.
+    #[allow(dead_code)]
     pub fn start_watch(&self, root: &std::path::Path) {
         use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
         use std::sync::mpsc;
@@ -271,7 +401,12 @@ impl Store {
     /// Stop file watcher.
     #[allow(dead_code)]
     pub fn stop_watch(&self) {
-        kg::stop_watch(&self.watch_handle);
+        if let Ok(mut h) = self.watch_handle.lock() {
+            if let Some(handle) = h.take() {
+                handle.abort();
+                log::info!("kg_watch: stopped");
+            }
+        }
     }
 
     /// Scan git history and write commit/file relationships.
@@ -280,7 +415,71 @@ impl Store {
         git_root: &std::path::Path,
         project: &Option<String>,
     ) -> Result<()> {
-        kg::scan_git_history(&self.pool, git_root, project).await
+        use std::process::Command;
+        let now = chrono::Utc::now().to_rfc3339();
+        let output = Command::new("git")
+            .args([
+                "log",
+                "--name-only",
+                "--pretty=format:COMMIT%x00%H%x00%s%x00%an%x00%ai",
+                "-100",
+                "--diff-filter=AM",
+            ])
+            .current_dir(git_root)
+            .output()?;
+        if !output.status.success() {
+            return Ok(());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut commit_hash = String::new();
+        let mut commit_msg = String::new();
+        let mut commit_author = String::new();
+        let mut in_files = false;
+        for line in stdout.lines() {
+            if line.starts_with("COMMIT ") {
+                if !commit_hash.is_empty() && in_files {
+                    let cid = format!("commit:{}", &commit_hash[..8]);
+                    let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(project).bind(&now).execute(&self.pool).await;
+                    if !commit_msg.is_empty() {
+                        let ms: String = commit_msg.chars().take(80).collect();
+                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(project).bind(&now).execute(&self.pool).await;
+                    }
+                    if !commit_author.is_empty() {
+                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(project).bind(&now).execute(&self.pool).await;
+                    }
+                }
+                let parts: Vec<&str> = line.split(' ').collect();
+                if parts.len() >= 5 {
+                    commit_hash = parts[1].to_string();
+                    commit_msg = parts[2].to_string();
+                    commit_author = parts[3].to_string();
+                }
+                in_files = true;
+            } else if in_files && !line.is_empty() {
+                let file_path = line.trim();
+                if file_path.is_empty() {
+                    continue;
+                }
+                let cid = format!("commit:{}", &commit_hash[..8]);
+                let stem = std::path::Path::new(file_path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(format!("file:{}", stem)).bind("modified_in").bind(&cid).bind(project).bind(&now).execute(&self.pool).await;
+            }
+        }
+        if !commit_hash.is_empty() && in_files {
+            let cid = format!("commit:{}", &commit_hash[..8]);
+            let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(project).bind(&now).execute(&self.pool).await;
+            if !commit_msg.is_empty() {
+                let ms: String = commit_msg.chars().take(80).collect();
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(project).bind(&now).execute(&self.pool).await;
+            }
+            if !commit_author.is_empty() {
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(project).bind(&now).execute(&self.pool).await;
+            }
+        }
+        Ok(())
     }
 
     pub async fn save(&self, input: NewMemory) -> Result<String> {
@@ -312,7 +511,38 @@ impl Store {
     }
 
     async fn init_vec(&self) -> Result<()> {
-        schema::init_vec(&self.pool, self.vec_dims).await
+        // Check if existing embeddings use wrong dimensions
+        // Use most common stored dims (not LIMIT 1 — might hit stale row)
+        let stored_dims: Option<i64> = sqlx::query_scalar(
+            "SELECT embedding_dims FROM memories WHERE embedding IS NOT NULL GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1"
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let needs_rebuild =
+            self.vec_dims > 0 && stored_dims.is_some_and(|d| d as usize != self.vec_dims);
+        if needs_rebuild {
+            log::info!(
+                "init_vec: stored dims != {}, dropping vec0 + clearing embeddings",
+                self.vec_dims
+            );
+            sqlx::query("DROP TABLE IF EXISTS vec_memories")
+                .execute(&self.pool)
+                .await?;
+            sqlx::query(
+                "UPDATE memories SET embedding = NULL, embedding_model = NULL, embedding_dims = NULL"
+            )
+            .execute(&self.pool)
+            .await?;
+        }
+
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[{dims}])",
+            dims = self.vec_dims,
+        )))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// sqlite-vec KNN search. Falls back to FTS5 if vec extension not loaded.
@@ -322,7 +552,71 @@ impl Store {
         limit: u8,
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
-        search::search_vec(&self.pool, query_vec_orig, limit, memory_type).await
+        let mut query_vec = query_vec_orig.to_vec();
+        normalize_l2(&mut query_vec);
+        let query_vec = query_vec.as_slice();
+        let json_vec: String = serde_json::to_string(&query_vec)?;
+        let lim = limit.min(50) as i64;
+
+        #[allow(clippy::type_complexity)]
+        let rows: Vec<(
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<i32>,
+            Option<String>,
+            f64,
+        )> = if let Some(t) = memory_type {
+            sqlx::query_as(
+                    "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid WHERE m.deleted_at IS NULL AND m.type = ?4 AND v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
+                )
+                .bind(&json_vec).bind(lim).bind(lim).bind(t)
+                .fetch_all(&self.pool)
+                .await?
+        } else {
+            sqlx::query_as(
+                    "SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, v.distance                  FROM vec_memories v                  JOIN memories m ON m.rowid = v.rowid WHERE m.deleted_at IS NULL AND v.embedding MATCH ?1 AND v.k = ?2                  ORDER BY v.distance LIMIT ?3",
+                )
+                .bind(&json_vec).bind(lim).bind(lim)
+                .fetch_all(&self.pool)
+                .await?
+        };
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    mt,
+                    content,
+                    tags,
+                    files,
+                    project,
+                    source_file,
+                    importance,
+                    created_at,
+                    distance,
+                )| {
+                    SearchResult {
+                        id,
+                        memory_type: mt,
+                        content,
+                        tags: parse_json(&tags),
+                        files: parse_json(&files),
+                        project,
+                        source_file,
+                        importance: importance.unwrap_or(3),
+                        score: (1.0_f64 - distance.powi(2) / 2.0).max(0.0),
+                        created_at: created_at.unwrap_or_default(),
+                        embedding: None,
+                    }
+                },
+            )
+            .collect())
     }
 
     /// Hybrid search with Reciprocal Rank Fusion (RRF).
@@ -333,18 +627,65 @@ impl Store {
         limit: u8,
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
-        let decay = |score: f64, created_at: &str| self.decay_score(score, created_at);
-        search::search_rrf(
-            &self.pool,
-            &self.embedder,
-            self.vec_enabled,
-            query,
-            limit,
-            memory_type,
-            self.rrf_k,
-            decay,
-        )
-        .await
+        let k = limit.min(MAX_LIMIT) as usize;
+
+        // Get query embedding upfront (needed for vec0, may be used for fallback)
+        let qv = if self.vec_enabled {
+            if let Some(ref emb) = self.embedder {
+                emb.embed_one(query).await.ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Run both search paths concurrently
+        let (mut vec_results, fts_results) = if let Some(ref qv) = qv {
+            let vec_fut = self.search_vec(qv, limit, memory_type);
+            let fts_fut = self.search_fts(query, limit.min(MAX_LIMIT), memory_type);
+            let (vr, fr) = tokio::join!(vec_fut, fts_fut);
+            let vec_r = vr.unwrap_or_default();
+            let fts_r = fr?;
+            (vec_r, fts_r)
+        } else {
+            let fts_r = self
+                .search_fts(query, limit.min(MAX_LIMIT), memory_type)
+                .await?;
+            (vec![], fts_r)
+        };
+
+        if vec_results.is_empty() {
+            if !fts_results.is_empty() {
+                let mut fts_results = fts_results;
+                for r in &mut fts_results {
+                    r.score = self.decay_score(r.score, &r.created_at);
+                }
+                log::info!("rrf: FTS5-only ({} results)", fts_results.len());
+                return Ok(fts_results);
+            }
+            if let Some(ref emb) = self.embedder {
+                if qv.is_some() {
+                    let hybrid = self.search_hybrid(emb, query, limit, memory_type).await?;
+                    log::info!(
+                        "rrf: cosine rerank fallback ({} results, top={:.3})",
+                        hybrid.len(),
+                        hybrid.first().map(|r| r.score).unwrap_or(0.0)
+                    );
+                    return Ok(hybrid);
+                }
+            }
+            return Ok(vec![]);
+        }
+
+        // Apply temporal decay to vec_results before merge
+        for r in &mut vec_results {
+            r.score = self.decay_score(r.score, &r.created_at);
+        }
+
+        let merged = rrf_merge(vec_results, fts_results, k, self.rrf_k);
+        log::info!("rrf: merged {} results", merged.len());
+        Ok(merged)
     }
 
     /// FTS5-only keyword search.
@@ -354,7 +695,30 @@ impl Store {
         limit: u8,
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
-        search::search_fts(&self.pool, query, limit, memory_type).await
+        let lim = limit.min(MAX_LIMIT) as i64;
+        let rows: Vec<SearchRow> = if let Some(t) = memory_type {
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?3")
+                .bind(query).bind(t).bind(lim).fetch_all(&self.pool).await?
+        } else {
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?2")
+                .bind(query).bind(lim).fetch_all(&self.pool).await?
+        };
+        Ok(rows
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.id,
+                memory_type: r.memory_type,
+                content: r.content,
+                tags: parse_json(&r.tags),
+                files: parse_json(&r.files),
+                project: r.project,
+                source_file: r.source_file.clone(),
+                importance: r.importance.unwrap_or(3),
+                score: 0.5,
+                created_at: r.created_at.unwrap_or_default(),
+                embedding: r.embedding,
+            })
+            .collect())
     }
 
     /// Hybrid search: FTS5 recall + cosine rerank with query embedding.
@@ -365,7 +729,73 @@ impl Store {
         limit: u8,
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
-        search::search_hybrid(&self.pool, embedder, query, limit, memory_type).await
+        // Step 1: Get query embedding from local/remote model
+        let query_vec = embedder.embed_one(query).await?;
+
+        // Step 2: FTS5 recall (wider window for reranking)
+        let recall_limit = (limit as i64 * RECALL_MULTIPLIER as i64).min(MAX_LIMIT as i64);
+        let rows: Vec<SearchRow> = if let Some(t) = memory_type {
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?3")
+                .bind(query).bind(t).bind(recall_limit).fetch_all(&self.pool).await?
+        } else {
+            sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?2")
+                .bind(query).bind(recall_limit).fetch_all(&self.pool).await?
+        };
+
+        // Step 3: Cosine rerank (only rows with embeddings)
+        let mut results: Vec<SearchResult> = Vec::new();
+        let mut bm25_only: Vec<SearchResult> = Vec::new();
+
+        for r in rows {
+            if let Some(ref emb) = r.embedding {
+                if let Some(emb_vec) = bytes_to_f32_vec(emb) {
+                    let cosine = cosine_similarity(&query_vec, &emb_vec);
+                    results.push(SearchResult {
+                        id: r.id,
+                        memory_type: r.memory_type,
+                        content: r.content,
+                        tags: parse_json(&r.tags),
+                        files: parse_json(&r.files),
+                        project: r.project,
+                        source_file: r.source_file.clone(),
+                        importance: r.importance.unwrap_or(3),
+                        score: cosine as f64,
+                        created_at: r.created_at.unwrap_or_default(),
+                        embedding: Some(emb.clone()),
+                    });
+                    continue;
+                }
+            }
+            // Fallback: BM25-only (no embedding yet)
+            bm25_only.push(SearchResult {
+                id: r.id,
+                memory_type: r.memory_type,
+                content: r.content,
+                tags: parse_json(&r.tags),
+                files: parse_json(&r.files),
+                project: r.project,
+                source_file: r.source_file.clone(),
+                importance: r.importance.unwrap_or(3),
+                score: 0.5,
+                created_at: r.created_at.unwrap_or_default(),
+                embedding: r.embedding.clone(),
+            });
+        }
+
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit as usize);
+
+        // Append BM25-only results for padding
+        if results.len() < limit as usize {
+            let remaining = limit as usize - results.len();
+            results.extend(bm25_only.into_iter().take(remaining));
+        }
+
+        Ok(results)
     }
 
     pub async fn list(
@@ -438,6 +868,7 @@ impl Store {
         Ok(())
     }
 
+    /// Multiply score by e^(-days/half_life) for temporal decay.
     fn decay_score(&self, score: f64, created_at: &str) -> f64 {
         if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(created_at) {
             let fixed: chrono::DateTime<Utc> = dt.into();
@@ -451,6 +882,7 @@ impl Store {
             score
         }
     }
+
     pub async fn stats(&self) -> Result<DbStats> {
         let mc: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL")
             .fetch_one(&self.pool)
@@ -503,6 +935,8 @@ impl Store {
         })
     }
 
+    // ─── embed worker (public, called from mcp server) ──────────────────────
+    /// Deduplicate memories by content+type, keeping the oldest (by created_at).
     /// Also VACUUM to reclaim disk space.
     pub async fn compact(&self, mode: &str, threshold: f32) -> Result<(usize, usize)> {
         if mode == "semantic" {
@@ -606,9 +1040,16 @@ impl Store {
     }
 
     async fn rebuild_fts(&self) -> Result<()> {
-        schema::rebuild_fts(&self.pool).await
+        sqlx::query("DELETE FROM memories_fts")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
+    /// Poll for rows without embeddings and compute them via remote API.
     pub async fn embed_pending(
         &self,
         embedder: &crate::embed::embeddings::Embedder,
@@ -684,6 +1125,7 @@ impl Store {
         Ok(ids.len())
     }
 
+    /// Gracefully shut down the store: flush WAL, close pool.
     pub async fn shutdown(self) {
         let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
             .execute(&self.pool)
@@ -692,6 +1134,124 @@ impl Store {
     }
 }
 
+// ─── Row types ──────────────────────────────────────────────────────────────
+
+#[derive(sqlx::FromRow)]
+struct SearchRow {
+    id: String,
+    #[sqlx(rename = "type")]
+    memory_type: Option<String>,
+    content: String,
+    tags: Option<String>,
+    files: Option<String>,
+    project: Option<String>,
+    source_file: Option<String>,
+    importance: Option<i32>,
+    created_at: Option<String>,
+    embedding: Option<Vec<u8>>,
+}
+#[derive(sqlx::FromRow)]
+struct MemoryRow {
+    id: String,
+    #[sqlx(rename = "type")]
+    memory_type: Option<String>,
+    content: String,
+    tags: Option<String>,
+    files: Option<String>,
+    project: Option<String>,
+    source_file: Option<String>,
+    importance: Option<i32>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+// ─── Vector math ─────────────────────────────────────────────────────────────
+
+fn normalize_l2(v: &mut [f32]) {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 1e-10 {
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
+    }
+}
+
+fn bytes_to_f32_vec(bytes: &[u8]) -> Option<Vec<f32>> {
+    if bytes.len() % 4 != 0 {
+        return None;
+    }
+    Some(
+        bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect(),
+    )
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let (dot, na, nb) = a
+        .iter()
+        .zip(b.iter())
+        .fold((0.0f32, 0.0f32, 0.0f32), |(d, na, nb), (&x, &y)| {
+            (d + x * y, na + x * x, nb + y * y)
+        });
+    let denom = (na.sqrt() * nb.sqrt()).max(1e-10);
+    (dot / denom).clamp(-1.0, 1.0)
+}
+
+fn parse_json(val: &Option<String>) -> Option<Vec<String>> {
+    match val {
+        Some(s) if !s.is_empty() => serde_json::from_str(s).ok(),
+        _ => None,
+    }
+}
+
+/// Detect project name from path or git for code scanning.
+fn detect_project_git_root(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                let p = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if p.is_empty() {
+                    None
+                } else {
+                    Some(std::path::PathBuf::from(p))
+                }
+            } else {
+                None
+            }
+        })
+}
+
+fn detect_project_for_scan(root: &std::path::Path) -> Option<String> {
+    // Try git first
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(root)
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string());
+            if name.is_some() {
+                return name;
+            }
+        }
+    }
+    // Fallback: use directory name
+    root.file_name().map(|n| n.to_string_lossy().to_string())
+}
+
+// ─── Re-embed integration tests ──────────────────────────────────────────────
 #[cfg(test)]
 #[allow(clippy::field_reassign_with_default)]
 mod tests {

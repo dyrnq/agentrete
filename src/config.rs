@@ -341,7 +341,7 @@ dims = 1536
 [embedding]
 backend = "remote"
 [embedding.remote]
-url = "http://192.168.6.9:11434"
+url = "http://localhost:11434"
 vendor = "ollama"
 model = "granite-embedding:278m"
 "#;

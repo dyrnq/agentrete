@@ -44,7 +44,7 @@ Do NOT save:
 | `decision`| Architecture and technology choices            | "Use sqlx instead of rusqlite"           |
 | `pattern`| Recurring problems and their solutions         | "DuckDB lock — use WAL mode"            |
 | `bug`    | Bugs that were fixed (so they don't recur)     | "vec0 init fails without foreign_keys"   |
-| `fact`   | Environment info, config details, gotchas      | "Ollama at 192.168.x.x:11434"           |
+| `fact`   | Environment info, config details, gotchas      | "Ollama at localhost:11434"           |
 
 Use `tags` for categorization: comma-separated keywords like
 `code-rule,workflow,agentrete`.
