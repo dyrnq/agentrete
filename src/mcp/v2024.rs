@@ -15,6 +15,6 @@ pub fn handle_initialize() -> Value {
             "version": env!("CARGO_PKG_VERSION")
         },
         "capabilities": {"tools": {"listChanged": false}},
-        "instructions": "MCP HTTP+SSE (2024-11-05). POST JSON-RPC to this URL. Tools: memory_search, memory_save, memory_list, memory_forget, memory_stats. Note: SSE streaming not supported; use JSON-only responses."
+        "instructions": super::protocol::MEMORY_PROTOCOL
     })
 }

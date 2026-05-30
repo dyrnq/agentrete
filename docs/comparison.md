@@ -1,81 +1,56 @@
 # Agentrete vs. Peer Projects
 
 Comparison of agentrete with other AI coding agent memory/context systems.
+Last updated: 2026-05-30.
 
-## Overview
+## agentrete vs. mempal — Head-to-Head
 
-| Feature | agentrete | Superpowers (obra) | Karpathy Skills | Cursor Rules | Claude Memory |
-|---------|-----------|-------------------|-----------------|-------------|---------------|
-| **Type** | MCP server (long-term memory) | Skills + instructions | CLAUDE.md guidelines | `.cursorrules` file | Built-in (closed) |
-| **Persistence** | SQLite (cross-session) | File-based skills | File-based | File-based | Proprietary |
-| **Search** | vec0 KNN + FTS5 hybrid | N/A (skill trigger) | N/A | N/A | Semantic (closed) |
-| **Embedding** | Model2Vec (local) / Ollama / OpenAI / Anthropic | None | None | None | Proprietary |
-| **Auto-save** | MCP hooks (post-tool-use) | None | None | None | Automatic |
-| **Cross-agent** | Codex + Claude Code + Cursor + Zed + OpenCode + Windsurf + Goose + Gemini | Codex + Claude Code + Cursor + Factory + Gemini + OpenCode + Copilot | Claude Code only | Cursor only | Claude only |
-| **Self-hosted** | ✅ (single binary, SQLite) | ✅ (git clone) | ✅ (git clone) | ✅ (file) | ❌ |
-| **Privacy** | All local, no telemetry | Local | Local | Local | Cloud |
+Based on source-level analysis of mempal (`.dev/mempal`, `sqlite` branch) and agentrete as of May 30, 2026.
 
-## Detailed Comparison
+| Dimension | agentrete (current) | mempal |
+|-----------|---------------------|--------|
+| **Storage** | SQLite + FTS5 + **vec0 standalone** (`ext/*.so` embedded via `include_bytes!()`) | SQLite + **sqlite-vec crate** (C source compiled via `cc` → `libsqlite_vec0.a`, auto-extension on every connection) |
+| **Search** | Three-tier fallback: vec0 KNN → cosine rerank → FTS5 BM25 | **RRF fusion**: BM25 + vector in parallel, merged via `1/(60+rank)` |
+| **Embedding** | model2vec-rs / **Ollama / OpenAI / Anthropic** (4 backends) | model2vec-rs / ONNX (2 backends, no remote API) |
+| **MCP tools** | **6** (search/save/list/forget/stats/compact) | **23** (incl. KG, fact_check, doctor, brief, context, partner, tunnels, ingest, delete, taxonomy) |
+| **Knowledge graph** | ❌ | ✅ SPO triples + `mempal_kg` query |
+| **Cross-project** | ❌ | ✅ tunnels (cross-wing links) |
+| **Protocol self-description** | ❌ | ✅ `MEMORY_PROTOCOL` (~400 lines) embedded in `initialize.instructions` |
+| **Multi-agent collaboration** | ❌ | ✅ `peek_partner` + `cowork_push` + `cowork_bus` |
+| **Citation traceability** | ❌ | ✅ `drawer_id` + `source_file` + `trigger_hints` |
+| **Cognitive brief** | ❌ | ✅ `mempal_brief` (facts + evidence + uncertainty + cards, deterministic) |
+| **Self-diagnostics** | ❌ | ✅ `mempal_doctor` (schema version, tool count, DB size, runtime health) |
+| **Install** | `cargo build` (single binary ~350MB debug) | `cargo install` (feature flags: model2vec/onnx/rest) |
+| **Web framework** | **axum 0.8.9** + sqlx async pool | **rmcp** (MCP-native framework) + rusqlite |
+| **Config** | config-rs (TOML/YAML/JSON, nested `[embedding.*]`) | Custom config |
+| **Model distillation** | ✅ Full toolchain (bge-small distilled to 10MB, docs/model2vec-distillation.md) | ❌ No distillation tools |
+| **Embed worker** | ✅ Async batch embed + model-switch auto-recompute | ❌ Compute on demand |
+| **Seed subcommand** | ✅ Rules baked into binary, writes directly to SQLite | ❌ |
+| **PreToolUse hook** | ✅ Blocks sed/python3 source tampering | ✅ MCP hooks |
+| **Cross-platform vec0** | ✅ linux/macos/windows × x86_64/aarch64 all bundled | sqlite-vec crate handles via C compilation |
 
-### agentrete
+### Key differences explained
 
-**Strengths**:
-- True long-term memory with semantic search (vec0 KNN + cosine + FTS5)
-- Automatic memory capture via MCP hooks
-- Cross-session persistence (rules, decisions, patterns survive restarts)
-- Multi-backend embeddings: local Model2Vec (10MB, 0.17ms), remote Ollama/OpenAI/Anthropic
-- Single binary deploy, zero external dependencies
-- 8 agent integrations (Codex, Claude, Cursor, etc.)
+**Search algorithm**: agentrete uses serial fallback (try vec0 KNN first; if empty/error, fall through to cosine rerank; if no embedder, fall through to FTS5 BM25). mempal runs BM25 and vector in parallel, then fuses the two ranked lists with Reciprocal Rank Fusion (`RRF_K=60`). RRF is theoretically more principled — a result appearing in both lists gets boosted. However, agentrete's serial chain is faster when vec0 KNN returns good results (no need to run the second path).
 
-**Weaknesses**:
-- Requires MCP server running (process management needed)
-- Model2Vec requires one-time distillation step
-- No built-in skill/methodology system (complementary to Superpowers)
+**vec0 loading**: mempal uses the `sqlite-vec` Rust crate, which compiles `sqlite-vec.c` from source via `cc` and registers it as a `rusqlite::auto_extension`. Every `Connection::open()` automatically has `vec0` available — no manual `load_extension()` needed. agentrete pre-downloads 6 platform-specific `.so`/`.dylib`/`.dll` files and calls `load_extension()` at startup. The crate approach is cleaner and avoids bundling multi-platform binaries, but requires a C compiler at build time.
 
-### Superpowers (obra)
+**MCP tool count (6 vs 23)**: Most of mempal's extra tools are in domains agentrete deliberately doesn't cover — knowledge graphs, multi-agent cowork bus, 4-tier knowledge lifecycle (distill/gate/promote/demote/publish). The ones genuinely worth borrowing: `mempal_doctor` (self-diagnostics), `MEMORY_PROTOCOL` (teach agents how to use memory), and RRF fusion.
 
-**Strengths**:
-- Complete development methodology (spec → plan → subagent → review)
-- Subagent-driven development with autonomous 2-hour sessions
-- TDD-focused workflow
-- Excellent for complex, multi-step development tasks
+**Embedding backends**: agentrete wins with 4 backends vs mempal's 2. mempal has no remote API support (no Ollama/OpenAI/Anthropic embedding clients), only local model2vec and ONNX.
 
-**Weaknesses**:
-- No persistent memory between sessions
-- Skills are methodology-focused, not memory-focused
-- No semantic search over past decisions/patterns
+## Overview vs. Other Peers
 
-### Karpathy Skills
-
-**Strengths**:
-- Addresses common LLM pitfalls (over-engineering, assumption-making)
-- Simple, single-file `CLAUDE.md` integration
-- Clear anti-patterns and coding rules
-
-**Weaknesses**:
-- Claude Code only
-- No semantic search
-- No cross-session persistence
-- Static rules, no learning from experience
-
-### Complementary Use
-
-Agentrete and Superpowers can be used together:
-
-```
-Superpowers (methodology)  +  agentrete (memory)
-        │                           │
-    "How to build"              "What we learned"
-     spec → plan                 rules → decisions
-     subagent-driven             patterns → bugs
-```
-
-**Recommended setup**:
-1. Install Superpowers skills for development methodology
-2. Install agentrete for cross-session memory
-3. Use Karpathy-inspired `CLAUDE.md` for anti-pattern rules
-4. Seed agentrete with community rules from Superpowers + Karpathy
-
+| Feature | agentrete | mempal | Superpowers | Karpathy Skills |
+|---------|-----------|--------|-------------|-----------------|
+| **Type** | MCP server | MCP server | Skills + instructions | CLAUDE.md |
+| **Persistence** | SQLite + vec0 | SQLite + sqlite-vec | File-based skills | File-based |
+| **Search** | vec0 KNN → cosine → FTS5 | BM25 + vec0 RRF | N/A | N/A |
+| **Embedding** | model2vec / Ollama / OpenAI / Anthropic | model2vec / ONNX | None | None |
+| **Auto-save** | MCP hooks | MCP hooks | None | None |
+| **Cross-agent** | 8 agents | MCP-generic | 7 agents | Claude only |
+| **Self-hosted** | ✅ | ✅ | ✅ | ✅ |
+| **Privacy** | All local | All local | Local | Local |
 
 ## Open-Source Memory Alternatives
 
@@ -83,37 +58,20 @@ Superpowers (methodology)  +  agentrete (memory)
 
 **Type**: MCP server (Rust, LanceDB + ONNX)
 
-**Strengths**:
-- Embedded LanceDB (no external DB needed)
-- ONNX embeddings (local, 80-274MB models)
-- Hybrid search (BM25 + vector RRF fusion)
-- Cross-encoder reranking for better accuracy
-- CLI parity with MCP tools
-
-**vs. agentrete**:
 | Feature | agentrete | AgentMem |
 |---------|-----------|----------|
-| Storage | SQLite + sqlite-vec | LanceDB |
+| Storage | SQLite + vec0 | LanceDB |
 | Embedding | Model2Vec (10MB) / Ollama / OpenAI | ONNX (80-274MB) |
 | Search | vec0 KNN → FTS5 cosine → FTS5 BM25 | BM25 + vector RRF + cross-encoder rerank |
 | Cross-agent hooks | Codex, Claude, Cursor, 5+ more | Claude, Codex, Gemini, OpenClaw, Hermes |
 | Auto-capture | MCP post-tool-use hooks | Automatic indexing + file watcher |
 | Temporal decay | No | Yes (configurable half-life) |
 | OpenTelemetry | No | Yes |
-| Binary size | ~350MB | Unknown (LanceDB + ONNX) |
 
 ### ramem (RAM)
 
 **Type**: MCP server (Rust, custom indexing)
 
-**Strengths**:
-- Zero infrastructure, embedded LanceDB
-- Automatic file watcher for session transcripts
-- OpenTelemetry observability
-- Async enrichment pipeline
-- Explicit memorize + auto-index hybrid
-
-**vs. agentrete**:
 | Feature | agentrete | ramem |
 |---------|-----------|-------|
 | Approach | Explicit save + background embed worker | Auto-index transcripts + explicit memorize |
@@ -122,37 +80,21 @@ Superpowers (methodology)  +  agentrete (memory)
 | Hooks integration | MCP hooks (post-tool-use) | File watcher + MCP hooks |
 | Use case | Coding rules, decisions, patterns | Session transcripts, decisions |
 
-
 ### agentmemory
 
 **Type**: MCP server (TypeScript, iii-engine, Node.js)
 
-**Strengths**:
-- Most popular memory MCP (1200+ GitHub stars on design doc)
-- Triple-stream retrieval: BM25 + vector + knowledge graph with RRF fusion
-- 4-tier memory consolidation (observations → memories → facts → insights)
-- Memory evolution: versioning, supersession, relationship graphs
-- Auto-forgetting: TTL expiry, contradiction detection, importance eviction
-- Privacy: auto-strips API keys, secrets, `<private>` tags
-- Self-healing: circuit breaker, provider fallback chain, health monitoring
-- Knowledge graph with entity extraction + BFS traversal
-- Git snapshots for version/rollback/diff
-- 9+ agent integrations
-
-**vs. agentrete**:
 | Feature | agentrete | agentmemory |
 |---------|-----------|-------------|
 | Language | Rust (single binary) | TypeScript (Node.js + npx) |
-| Storage | SQLite + sqlite-vec | iii-engine (proprietary) |
+| Storage | SQLite + vec0 | iii-engine (proprietary) |
 | Embedding | Model2Vec (10MB local) / Ollama / OpenAI / Anthropic | OpenAI / Ollama / Gemini / Claude |
 | Search | vec0 KNN → FTS5 cosine → FTS5 BM25 | BM25 + vector + graph RRF fusion |
 | Memory evolution | No (flat) | Yes (versioning, supersession) |
 | Knowledge graph | No | Yes (entities + BFS) |
 | Auto-forgetting | No | Yes (TTL, contradiction) |
-| Binary size | ~350MB (with jemalloc) | N/A (Node.js runtime) |
 | Install | `cargo build` or prebuilt binary | `npm i -g @agentmemory/mcp` |
 | Target user | Developers who want speed + simplicity | Teams who want advanced memory management |
-
 
 ## Market Positioning
 
@@ -174,10 +116,10 @@ Superpowers (methodology)  +  agentrete (memory)
 
 **agentrete** occupies the **lightweight + explicit** quadrant:
 - Smallest model (10MB Model2Vec vs 80MB ONNX)
-- Fastest search (vec0 KNN 0.1ms vs LanceDB/RRF)
+- Fastest search (vec0 KNN ~0.1ms vs LanceDB/RRF)
+- Most embedding backends (4)
 - Most agent integrations (8)
 - Coding-specific memory types (rule/decision/pattern/bug/fact)
-
 
 ## Feature Borrowing Analysis
 
@@ -187,45 +129,44 @@ Features worth borrowing from peer projects, prioritized by value/effort ratio.
 
 | Feature | Source | Effort | Why agentrete needs it |
 |---------|--------|--------|----------------------|
-| **memory_save_batch** | all (batch ops) | Low (add MCP tool + SQL) | Already in TODO; reduces HTTP round-trips 100x |
-| **Temporal decay in search** | ramem, agentmemory | Low (multiply score by `e^(-days/half_life)`) | Old rules shouldn't outrank recent decisions |
-| **memory_list filtering by type** | AgentMem (namespaces) | Low (add WHERE type=? to list()) | Already needed — can't list only "rule" type today |
-| **Git snapshot of memory state** | agentmemory | Medium (dump DB to git) | Rollback after bad memory saves; audit trail |
+| **RRF fusion for search** | mempal | Medium | Merge vec0 KNN + FTS5 BM25 scores in parallel, not serial fallback |
+| **MEMORY_PROTOCOL in instructions** | mempal | Low | Tell agents when/how to use memory tools in `initialize` response |
+| **mempal_doctor equivalent** | mempal | Low | Self-diagnostics MCP tool (schema version, tool count, DB health) |
+| **Temporal decay in search** | ramem, agentmemory | Low | Multiply score by `e^(-days/half_life)` so old rules don't outrank recent |
+| **memory_list filtering by type** | AgentMem | Low | Add WHERE type=? to list() — already needed |
 
 ### Medium ROI (next milestone)
 
 | Feature | Source | Effort | Why |
 |---------|--------|--------|-----|
-| **Auto-capture via file watcher** | ramem (FS watcher) | Medium (notify crate) | No MCP hooks needed — detect file changes → save observations |
-| **Privacy filter (strip secrets)** | agentmemory | Medium (regex patterns) | Safety: never store API keys, tokens, passwords |
-| **RRF fusion for search** | ramem, agentmemory | Medium (algorithm) | Merge vec0 + FTS5 scores better than current fallback chain |
-| **Cross-encoder reranking** | ramem | Medium (need model) | Improve search accuracy for ambiguous queries |
-| **Session persistence** | agentmemory (4-tier) | High | Summarize sessions → extract patterns → long-term insight |
+| **Auto-capture via file watcher** | ramem | Medium | notify crate; no MCP hooks needed for file changes |
+| **Privacy filter (strip secrets)** | agentmemory | Medium | Regex patterns for API keys, tokens, passwords |
+| **Citation traceability** | mempal | Medium | source_file + drawer_id in search results |
+| **Cross-encoder reranking** | ramem | Medium | Improve accuracy for ambiguous queries |
 
 ### Low ROI (defer)
 
 | Feature | Source | Why skip for now |
 |---------|--------|-----------------|
-| Knowledge graph | agentmemory | Memory volume too low (32 items); petgraph viable later |
-| 4-tier memory consolidation | agentmemory | Overkill for coding rules; flat rules/decisions/patterns sufficient |
+| Knowledge graph | mempal, agentmemory | Memory volume too low; petgraph viable later |
+| 4-tier memory consolidation | agentmemory | Overkill for coding rules |
 | OpenTelemetry | ramem | Only if multi-instance deployment needed |
 | Team/shared memory | agentmemory | Solo use case currently |
-| Cross-encoder rerank | ramem | Model2Vec accuracy sufficient; trade speed for accuracy only when needed |
-| Auto-forgetting (TTL) | agentmemory | Coding rules don't expire; contradiction detection more useful |
-| Claude MEMORY.md bridge | agentmemory | Claude-specific; agentrete is agent-agnostic |
+| Auto-forgetting (TTL) | agentmemory | Coding rules don't expire |
+| Multi-agent collaboration | mempal | Single-agent use case |
+| Cognitive brief | mempal | Nice-to-have, not core need |
 
 ## Competitive Advantages (Keep)
-
-What agentrete does better than peers — don't dilute these:
 
 | Advantage | vs. |
 |-----------|-----|
 | **Smallest model (10MB Model2Vec)** | AgentMem (80MB ONNX), ramem (80-274MB ONNX) |
-| **Fastest search (vec0 KNN 0.1ms)** | agentmemory (BM25+vector+graph RRF), ramem (RRF+rerank) |
-| **Most backends (Model2Vec/Ollama/OpenAI/Anthropic)** | AgentMem (ONNX only), ramem (ONNX only) |
-| **Rust single binary (215MB debug, ~60MB release)** | agentmemory (Node.js+npm), AgentMem (Rust+LanceDB) |
+| **Fastest search (vec0 KNN ~0.1ms)** | agentmemory (BM25+vector+graph RRF), ramem (RRF+rerank) |
+| **Most backends (Model2Vec/Ollama/OpenAI/Anthropic)** | AgentMem (ONNX only), ramem (ONNX only), mempal (model2vec/ONNX only) |
+| **Rust single binary** | agentmemory (Node.js+npm), AgentMem (Rust+LanceDB) |
 | **Most agent integrations (8)** | AgentMem (5), ramem (MCP-generic) |
-| **sqlite-vec KNN (native)** | All others use external vector DBs |
+| **vec0 KNN (native in SQLite)** | All others use external vector DBs or LanceDB |
+| **Model distillation toolchain** | mempal (no distillation), ramem (no distillation) |
 
 ## Ecosystem Position
 

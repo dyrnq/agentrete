@@ -13,6 +13,8 @@ use crate::types::{DbStats, Memory, NewMemory, SearchResult};
 
 // Embedded sqlite-vec extension for the current platform.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+// Embedded sqlite-vec extension for the current platform.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const VEC_EXT_BYTES: &[u8] = include_bytes!("../ext/vec0-linux-x86_64.so");
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 const VEC_EXT_BYTES: &[u8] = &[];
@@ -24,6 +26,52 @@ pub struct Store {
     embedder: Option<Arc<Embedder>>,
     vec_enabled: bool,
     vec_dims: usize,
+}
+
+/// Reciprocal Rank Fusion: merge vec0 KNN and FTS5 BM25 ranked lists.
+/// RRF score = sum(1 / (K + rank)) across lists, with K=60.
+/// Returns top-k results sorted by RRF score descending.
+fn rrf_merge(
+    vec_results: Vec<SearchResult>,
+    fts_results: Vec<SearchResult>,
+    k: usize,
+) -> Vec<SearchResult> {
+    const RRF_K: f64 = 60.0;
+    use std::collections::HashMap;
+
+    let mut scores: HashMap<&str, f64> = HashMap::new();
+    let mut data: HashMap<&str, &SearchResult> = HashMap::new();
+
+    for (rank, r) in vec_results.iter().enumerate() {
+        *scores.entry(r.id.as_str()).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
+        data.entry(r.id.as_str()).or_insert(r);
+    }
+    for (rank, r) in fts_results.iter().enumerate() {
+        *scores.entry(r.id.as_str()).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
+        data.entry(r.id.as_str()).or_insert(r);
+    }
+
+    let mut merged: Vec<(&str, f64)> = scores.into_iter().collect();
+    merged.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    merged
+        .into_iter()
+        .take(k)
+        .filter_map(|(id, score)| {
+            data.get(id).map(|r| SearchResult {
+                id: r.id.clone(),
+                memory_type: r.memory_type.clone(),
+                content: r.content.clone(),
+                tags: r.tags.clone(),
+                files: r.files.clone(),
+                project: r.project.clone(),
+                importance: r.importance,
+                score,
+                created_at: r.created_at.clone(),
+                embedding: r.embedding.clone(),
+            })
+        })
+        .collect()
 }
 
 impl Store {
@@ -55,7 +103,7 @@ impl Store {
                 ("macos", "x86_64") => "vec0-macos-x86_64.dylib",
                 ("macos", "aarch64") => "vec0-macos-aarch64.dylib",
                 ("windows", "x86_64") => "vec0-windows-x86_64.dll",
-                _ => "vec0.so",
+                _ => "none",
             };
             let ext_path = tmp_dir.join(ext_name);
             match std::fs::write(&ext_path, VEC_EXT_BYTES) {
@@ -197,48 +245,62 @@ impl Store {
             .collect())
     }
 
-    /// Search — auto-selects vec (KNN) > hybrid (cosine) > FTS5 (BM25).
+    /// Hybrid search with Reciprocal Rank Fusion (RRF).
+    /// Runs vec0 KNN and FTS5 BM25 concurrently, then merges scores via RRF (k=60).
     pub async fn search(
         &self,
         query: &str,
         limit: u8,
         memory_type: Option<&str>,
     ) -> Result<Vec<SearchResult>> {
-        // Prefer sqlite-vec KNN if extension is loaded and embedder is available
-        if self.vec_enabled {
+        let k = limit.min(100) as usize;
+
+        // Get query embedding upfront (needed for vec0, may be used for fallback)
+        let qv = if self.vec_enabled {
             if let Some(ref emb) = self.embedder {
-                if let Ok(query_vec) = emb.embed_one(query).await {
-                    match self.search_vec(&query_vec, limit, memory_type).await {
-                        Ok(results) if !results.is_empty() => {
-                            log::info!(
-                                "search: vec0 KNN hit ({} results, top score={:.3})",
-                                results.len(),
-                                results.first().map(|r| r.score).unwrap_or(0.0)
-                            );
-                            return Ok(results);
-                        }
-                        Ok(_) => log::info!("search: vec0 KNN empty, falling back to hybrid"),
-                        Err(e) => {
-                            log::info!("search: vec0 KNN error ({e}), falling back to hybrid")
-                        }
-                    }
+                emb.embed_one(query).await.ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Run both search paths concurrently
+        let (vec_results, fts_results) = if let Some(ref qv) = qv {
+            let vec_fut = self.search_vec(qv, limit, memory_type);
+            let fts_fut = self.search_fts(query, limit.min(100), memory_type);
+            let (vr, fr) = tokio::join!(vec_fut, fts_fut);
+            let vec_r = vr.unwrap_or_default();
+            let fts_r = fr?;
+            (vec_r, fts_r)
+        } else {
+            let fts_r = self.search_fts(query, limit.min(100), memory_type).await?;
+            (vec![], fts_r)
+        };
+
+        if vec_results.is_empty() {
+            if !fts_results.is_empty() {
+                log::info!("rrf: FTS5-only ({} results)", fts_results.len());
+                return Ok(fts_results);
+            }
+            if let Some(ref emb) = self.embedder {
+                if qv.is_some() {
+                    let hybrid = self.search_hybrid(emb, query, limit, memory_type).await?;
+                    log::info!(
+                        "rrf: cosine rerank fallback ({} results, top={:.3})",
+                        hybrid.len(),
+                        hybrid.first().map(|r| r.score).unwrap_or(0.0)
+                    );
+                    return Ok(hybrid);
                 }
             }
+            return Ok(vec![]);
         }
-        // Fallback: hybrid (cosine rerank) if embedder is available
-        if let Some(ref emb) = self.embedder {
-            let results = self.search_hybrid(emb, query, limit, memory_type).await?;
-            log::info!(
-                "search: hybrid cosine ({} results, top score={:.3})",
-                results.len(),
-                results.first().map(|r| r.score).unwrap_or(0.0)
-            );
-            return Ok(results);
-        }
-        // Final fallback: FTS5 BM25 only
-        let results = self.search_fts(query, limit, memory_type).await?;
-        log::info!("search: FTS5 BM25-only ({} results)", results.len());
-        Ok(results)
+
+        let merged = rrf_merge(vec_results, fts_results, k);
+        log::info!("rrf: merged {} results", merged.len());
+        Ok(merged)
     }
 
     /// FTS5-only keyword search.

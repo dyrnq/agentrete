@@ -15,6 +15,6 @@ pub fn handle_initialize() -> Value {
             "version": env!("CARGO_PKG_VERSION")
         },
         "capabilities": {"tools": {"listChanged": false}},
-        "instructions": "MCP Streamable HTTP (2025-11-25). POST JSON-RPC to this URL. Tools: memory_search, memory_save, memory_list, memory_forget, memory_stats. Supports ping and session management."
+        "instructions": super::protocol::MEMORY_PROTOCOL
     })
 }
