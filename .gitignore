@@ -3,3 +3,5 @@
 AGENTS.md
 codex.sh
 npm/bin/
+node_modules/
+package-lock.json
