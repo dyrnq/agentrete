@@ -59,9 +59,14 @@ def download_platform(version, platform_key, out_dir):
                         dst = os.path.join(out_dir, out_name)
                         shutil.copy2(src, dst)
                         return dst
-        print(f"    WARNING: binary not found in archive")
-    except Exception as e:
-        print(f"    FAILED: {e}")
+                print(f"    WARNING: binary not found in archive")
+            break  # success
+        except Exception as e:
+            if attempt < retries - 1:
+                print(f"    retry {attempt+1}/{retries}: {e}")
+                time.sleep(2)
+            else:
+                print(f"    FAILED: {e}")
     return None
 
 def main():
