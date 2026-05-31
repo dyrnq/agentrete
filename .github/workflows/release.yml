@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -193,4 +192,6 @@ jobs:
         if: steps.npm-check.outputs.published != 'true'
         run: |
           cd npm
-          npm publish --access public --provenance
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
