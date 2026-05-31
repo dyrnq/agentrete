@@ -26,9 +26,10 @@ jobs:
             target
           key: test-release-cargo-${{ hashFiles('Cargo.lock') }}
       - name: Download sqlite-vec extensions
-        run: python3 scripts/download-sqlite-vec.py -d ext
-      - name: Verify ext
-        run: 'test -f ext/vec0-linux-x86_64.so || { echo "ERROR: sqlite-vec extension missing"; exit 1; }'
+        run: |
+          mkdir -p ext
+          curl -sL "https://github.com/asg017/sqlite-vec/releases/download/v0.1.9/sqlite-vec-0.1.9-loadable-linux-x86_64.tar.gz" | tar xz -C /tmp
+          cp /tmp/vec0 ext/vec0-linux-x86_64.so
       - name: Run tests
         run: cargo test
 
@@ -64,9 +65,22 @@ jobs:
           key: ${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Download sqlite-vec extensions
-        run: python3 scripts/download-sqlite-vec.py -d ext
-      - name: Verify ext
-        run: 'test -f ext/vec0-linux-x86_64.so || { echo "ERROR: sqlite-vec extension missing"; exit 1; }'
+        shell: bash
+        run: |
+          mkdir -p ext
+          VEC_VER="0.1.9"
+          BASE="https://github.com/asg017/sqlite-vec/releases/download/v${VEC_VER}/sqlite-vec-${VEC_VER}-loadable"
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu)
+              curl -sL "${BASE}-linux-x86_64.tar.gz" | tar xz -C /tmp && cp /tmp/vec0 ext/vec0-linux-x86_64.so ;;
+            aarch64-apple-darwin)
+              curl -sL "${BASE}-macos-aarch64.tar.gz" | tar xz -C /tmp && cp /tmp/vec0 ext/vec0-macos-aarch64.dylib ;;
+            x86_64-apple-darwin)
+              curl -sL "${BASE}-macos-x86_64.tar.gz" | tar xz -C /tmp && cp /tmp/vec0 ext/vec0-macos-x86_64.dylib ;;
+            x86_64-pc-windows-msvc)
+              curl -sL "${BASE}-windows-x86_64.tar.gz" -o /tmp/vec0.zip && unzip -o /tmp/vec0.zip -d /tmp && cp /tmp/vec0.dll ext/vec0-windows-x86_64.dll ;;
+          esac
+          ls -la ext/
       - name: Build (release)
         run: cargo build --release --target ${{ matrix.target }}
 

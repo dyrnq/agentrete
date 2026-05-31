@@ -29,9 +29,10 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Download sqlite-vec extensions
-        run: python3 scripts/download-sqlite-vec.py -d ext
-      - name: Verify ext
-        run: 'test -f ext/vec0-linux-x86_64.so || { echo "ERROR: sqlite-vec extension missing"; exit 1; }'
+        run: |
+          mkdir -p ext
+          curl -sL "https://github.com/asg017/sqlite-vec/releases/download/v0.1.9/sqlite-vec-0.1.9-loadable-linux-x86_64.tar.gz" | tar xz -C /tmp
+          cp /tmp/vec0 ext/vec0-linux-x86_64.so
       - name: Clippy
         run: cargo clippy --all-targets
 
@@ -50,9 +51,10 @@ jobs:
             target
           key: test-cargo-${{ hashFiles('Cargo.lock') }}
       - name: Download sqlite-vec extensions
-        run: python3 scripts/download-sqlite-vec.py -d ext
-      - name: Verify ext
-        run: 'test -f ext/vec0-linux-x86_64.so || { echo "ERROR: sqlite-vec extension missing"; exit 1; }'
+        run: |
+          mkdir -p ext
+          curl -sL "https://github.com/asg017/sqlite-vec/releases/download/v0.1.9/sqlite-vec-0.1.9-loadable-linux-x86_64.tar.gz" | tar xz -C /tmp
+          cp /tmp/vec0 ext/vec0-linux-x86_64.so
       - name: Build
         run: cargo build
       - name: Build release
