@@ -110,11 +110,17 @@ fn install_claude(home: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn set_executable(path: &PathBuf) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mut perms = std::fs::metadata(path)?.permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
