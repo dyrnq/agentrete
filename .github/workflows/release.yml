@@ -65,7 +65,8 @@ jobs:
 
       - name: Download sqlite-vec extensions
         run: python3 scripts/download-sqlite-vec.py -d ext
-      - name: Verify ext
+      - name: Verify ext (Linux only)
+        if: runner.os == 'Linux'
         run: 'test -f ext/vec0-linux-x86_64.so || { echo "ERROR: sqlite-vec extension missing"; exit 1; }'
       - name: Build (release)
         run: cargo build --release --target ${{ matrix.target }}
