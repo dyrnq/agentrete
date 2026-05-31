@@ -28,15 +28,16 @@ jobs:
           key: lint-cargo-${{ hashFiles('Cargo.lock') }}
       - name: Check formatting
         run: cargo fmt --all -- --check
-      - name: Download sqlite-vec extensions
-        run: python3 scripts/download-sqlite-vec.py -d ext
-      - name: Verify ext
-        run: 'test -f ext/vec0-linux-x86_64.so || { echo "ERROR: sqlite-vec extension missing"; exit 1; }'
+      - name: Download ext artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sqlite-vec-ext
+          path: ext
       - name: Clippy
         run: cargo clippy --all-targets
 
   test:
-    needs: lint
+    needs: [prep, lint]
     name: Test
     runs-on: ubuntu-24.04
     steps:
@@ -49,10 +50,11 @@ jobs:
             ~/.cargo/git
             target
           key: test-cargo-${{ hashFiles('Cargo.lock') }}
-      - name: Download sqlite-vec extensions
-        run: python3 scripts/download-sqlite-vec.py -d ext
-      - name: Verify ext
-        run: 'test -f ext/vec0-linux-x86_64.so || { echo "ERROR: sqlite-vec extension missing"; exit 1; }'
+      - name: Download ext artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sqlite-vec-ext
+          path: ext
       - name: Build
         run: cargo build
       - name: Build release
