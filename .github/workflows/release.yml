@@ -12,21 +12,7 @@ env:
   BINARY_NAME: agentrete
 
 jobs:
-  prep:
-    name: Prepare ext
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download sqlite-vec for all platforms
-        run: python3 scripts/download-sqlite-vec.py -d ext
-      - name: Upload ext artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sqlite-vec-ext
-          path: ext/
-
   test:
-    needs: prep
     name: Test
     runs-on: ubuntu-24.04
     steps:
@@ -39,15 +25,9 @@ jobs:
             ~/.cargo/git
             target
           key: test-release-cargo-${{ hashFiles('Cargo.lock') }}
-      - name: Download ext artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: sqlite-vec-ext
-          path: ext
       - name: Run tests
         run: cargo test
   build:
-    needs: prep
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -78,11 +58,6 @@ jobs:
             target
           key: ${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
 
-      - name: Download ext artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: sqlite-vec-ext
-          path: ext
       - name: Build (release)
         run: cargo build --release --target ${{ matrix.target }}
 

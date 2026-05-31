@@ -11,21 +11,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  prep:
-    name: Prepare ext
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download sqlite-vec for all platforms
-        run: python3 scripts/download-sqlite-vec.py -d ext
-      - name: Upload ext artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sqlite-vec-ext
-          path: ext/
-
   lint:
-    needs: prep
     name: Lint & fmt
     runs-on: ubuntu-24.04
     steps:
@@ -42,11 +28,6 @@ jobs:
           key: lint-cargo-${{ hashFiles('Cargo.lock') }}
       - name: Check formatting
         run: cargo fmt --all -- --check
-      - name: Download ext artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: sqlite-vec-ext
-          path: ext
       - name: Clippy
         run: cargo clippy --all-targets
 
@@ -64,11 +45,6 @@ jobs:
             ~/.cargo/git
             target
           key: test-cargo-${{ hashFiles('Cargo.lock') }}
-      - name: Download ext artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: sqlite-vec-ext
-          path: ext
       - name: Build
         run: cargo build
       - name: Build release
