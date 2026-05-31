@@ -29,14 +29,15 @@ tokenizers = "0.19"
 rmcp = "1.7.0"
 dirs = "6.0.0"
 axum = { version = "0.8.9", features = ["macros"] }
-[target.'cfg(not(windows))'.dependencies]
-mimalloc = "0.1"
+
 config = { version = "0.15.20", features = ["toml", "yaml", "json"] }
 sqlite-vec = "0.1.9"
 log = "0.4.30"
 model2vec-rs = "0.2.1"
 petgraph = { version = "0.8.3", features = ["serde-1"] }
 notify = "7.0.0"
+[target.'cfg(not(windows))'.dependencies]
+mimalloc = "0.1"
 
 [dev-dependencies]
 
