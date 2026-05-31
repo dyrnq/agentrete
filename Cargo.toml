@@ -1,6 +1,6 @@
 [package]
 name = "agentrete"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "Local-first persistent memory for AI coding agents - sqlite-vec + FTS5 + MCP"

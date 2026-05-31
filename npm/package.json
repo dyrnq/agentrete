@@ -1,6 +1,6 @@
 {
   "name": "agentrete",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local-first persistent memory engine for AI coding agents",
   "license": "MIT",
   "bin": {
