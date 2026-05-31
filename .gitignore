@@ -1,0 +1,5 @@
+/target
+/.dev
+AGENTS.md
+codex.sh
+npm/bin/

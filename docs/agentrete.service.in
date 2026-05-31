@@ -1,0 +1,12 @@
+[Unit]
+Description=Agentrete Memory Server (MCP)
+After=network.target
+
+[Service]
+ExecStart=PATH_TO_BINARY -c PATH_TO_CONFIG mcp --port 9092
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target

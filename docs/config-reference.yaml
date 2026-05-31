@@ -1,0 +1,63 @@
+# Agentrete Configuration Reference (YAML format)
+# Copy to ~/.agentrete/config.yaml and customize.
+
+port: 9092
+
+embedding:
+  backend: remote      # none | local | remote
+
+  # ── Local backend ──────────────────────────────────────────────
+  local:
+    # model: BAAI/bge-small-zh-v1.5
+    # revision: main
+    # dims: 512
+    # endpoint: https://hf-mirror.com
+
+  # ── Remote backend ─────────────────────────────────────────────
+  remote:
+    url: http://localhost:11434
+    model: qwen3-embedding:latest
+    dims: 4096
+    # vendor: ollama               # openai | anthropic | ollama
+    # api_key: sk-xxx
+
+# ─── Alternative Configurations ──────────────────────────────────────────────
+
+# No embedding:
+# embedding:
+#   backend: none
+
+# Local offline:
+# embedding:
+#   backend: local
+#   local:
+#     model: BAAI/bge-small-zh-v1.5
+#     dims: 256
+  model2vec_path: "/path/to/distilled/model"
+
+# OpenAI:
+# embedding:
+#   backend: remote
+#   remote:
+#     url: https://api.openai.com/v1
+#     model: text-embedding-3-small
+#     api_key: sk-xxx
+#     vendor: openai
+#     dims: 1536
+
+# Anthropic:
+# embedding:
+#   backend: remote
+#   remote:
+#     url: https://api.anthropic.com
+#     model: voyage-3
+#     api_key: sk-ant-xxx
+#     vendor: anthropic
+#     dims: 1024
+
+# ─── Environment Variables ───────────────────────────────────────────────────
+#   AGENTRETE__PORT: "9092"
+#   AGENTRETE__EMBEDDING__BACKEND: "remote"
+#   AGENTRETE__EMBEDDING__REMOTE__URL: "http://localhost:11434"
+#   AGENTRETE__EMBEDDING__REMOTE__MODEL: "qwen3-embedding:latest"
+#   AGENTRETE__EMBEDDING__REMOTE__DIMS: "4096"

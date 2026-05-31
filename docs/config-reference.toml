@@ -1,0 +1,79 @@
+# Agentrete Configuration Reference
+# Copy to ~/.agentrete/config.toml and customize.
+
+# ─── Server ──────────────────────────────────────────────────────────────────
+
+port = 9092
+# db_dir = "/path/to/data"
+# cache_dir = "/path/to/cache"
+
+# ─── Embedding ───────────────────────────────────────────────────────────────
+
+[embedding]
+backend = "model2vec"   # "none" | "model2vec" | "remote"
+
+# ── Model2Vec backend (default, recommended) ─────────────────────────────────
+[embedding.model2vec]
+model = "BAAI/bge-small-zh-v1.5"    # source sentence-transformers model
+dims = 256                           # distilled dimension (256 = PCA from 512)
+# revision = "main"
+# model2vec_path = "/path/to/distilled/model"  # optional: pre-distilled model path
+# endpoint = "https://hf-mirror.com"
+
+
+# ── Remote backend ───────────────────────────────────────────────────────────
+[embedding.remote]
+url = "http://localhost:11434"
+model = "qwen3-embedding:latest"
+dims = 4096
+# vendor = "ollama"           # "openai" | "anthropic" | "ollama" (auto-detect)
+# api_key = "sk-xxx"          # required for Anthropic / OpenAI
+
+# ─── Alternative Configurations ──────────────────────────────────────────────
+
+# No embedding (FTS5-only BM25):
+# [embedding]
+# backend = "none"
+
+# Model2Vec with custom pre-distilled path:
+# [embedding]
+# backend = "model2vec"
+#
+# [embedding.model2vec]
+# model = "BAAI/bge-small-zh-v1.5"
+# dims = 256
+# model2vec_path = "/tmp/m2v-bge-small-zh"
+
+
+# OpenAI API:
+# [embedding]
+# backend = "remote"
+#
+# [embedding.remote]
+# url = "https://api.openai.com/v1"
+# model = "text-embedding-3-small"
+# api_key = "sk-xxx"
+# vendor = "openai"
+# dims = 1536
+
+# Anthropic API:
+# [embedding]
+# backend = "remote"
+#
+# [embedding.remote]
+# url = "https://api.anthropic.com"
+# model = "voyage-3"
+# api_key = "sk-ant-xxx"
+# vendor = "anthropic"
+# dims = 1024
+
+# ─── Environment Variables (AGENTRETE__ prefix, __ separator) ────────────────
+#   AGENTRETE__PORT=9092
+#   AGENTRETE__EMBEDDING__BACKEND=remote
+#   AGENTRETE__EMBEDDING__LOCAL__MODEL=BAAI/bge-small-zh-v1.5
+#   AGENTRETE__EMBEDDING__LOCAL__DIMS=512
+#   AGENTRETE__EMBEDDING__REMOTE__URL=http://localhost:11434
+#   AGENTRETE__EMBEDDING__REMOTE__MODEL=qwen3-embedding:latest
+#   AGENTRETE__EMBEDDING__REMOTE__DIMS=4096
+#   AGENTRETE__EMBEDDING__REMOTE__VENDOR=ollama
+#   AGENTRETE__EMBEDDING__REMOTE__API_KEY=sk-xxx
