@@ -13,13 +13,23 @@ use uuid::Uuid;
 use crate::embed::embeddings::Embedder;
 use crate::knowledge_graph::KnowledgeGraph;
 use crate::types::{DbStats, Memory, NewMemory, SearchResult};
-
-// Embedded sqlite-vec extension for the current platform.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-// Embedded sqlite-vec extension for the current platform.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const VEC_EXT_BYTES: &[u8] = include_bytes!("../ext/vec0-linux-x86_64.so");
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const VEC_EXT_BYTES: &[u8] = include_bytes!("../ext/vec0-linux-aarch64.so");
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const VEC_EXT_BYTES: &[u8] = include_bytes!("../ext/vec0-macos-x86_64.dylib");
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const VEC_EXT_BYTES: &[u8] = include_bytes!("../ext/vec0-macos-aarch64.dylib");
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+const VEC_EXT_BYTES: &[u8] = include_bytes!("../ext/vec0-windows-x86_64.dll");
+#[cfg(not(any(
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "aarch64"),
+    all(target_os = "macos", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "windows", target_arch = "x86_64"),
+)))]
 const VEC_EXT_BYTES: &[u8] = &[];
 
 // ─── Tunable constants (overridable via config) ──────────────────────────────
