@@ -59,12 +59,18 @@ jobs:
         shell: bash
         run: |
           TAG=${GITHUB_REF#refs/tags/}
-          BIN="${{ env.BINARY_NAME }}-${TAG}-${{ matrix.target }}"
-          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            BIN="${BIN}.exe"
-          fi
-          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}${{ contains(matrix.target, 'windows') && '.exe' || '' }} "$BIN"
-          sha256sum "$BIN" > "${BIN}.sha256"
+          SUFFIX=""
+          case "${{ matrix.target }}" in
+            *windows*) SUFFIX=".exe" ;;
+          esac
+          BIN="${{ env.BINARY_NAME }}-${TAG}-${{ matrix.target }}${SUFFIX}"
+          SRC="target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}${SUFFIX}"
+          cp "$SRC" "$BIN"
+          case "${{ runner.os }}" in
+            macOS)   shasum -a 256 "$BIN" > "${BIN}.sha256" ;;
+            Windows) certutil -hashfile "$BIN" SHA256 | grep -v "hash" | tr -d " \r\n" > "${BIN}.sha256" ;;
+            *)       sha256sum "$BIN" > "${BIN}.sha256" ;;
+          esac
           echo "artifact=${BIN}" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
