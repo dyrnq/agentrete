@@ -36,13 +36,27 @@ fn install(port: u16, binary: &str) -> Result<()> {
     let svc_dir = format!("{}/.config/systemd/user", home);
     std::fs::create_dir_all(&svc_dir)?;
 
+    // Copy binary to a stable location (~/.local/bin) to survive npx cache cleanup
+    let bin_dir = format!("{}/.local/bin", home);
+    std::fs::create_dir_all(&bin_dir)?;
+    let stable_bin = format!("{}/agentrete", bin_dir);
+    std::fs::copy(binary, &stable_bin)?;
+    // Ensure executable
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&stable_bin)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&stable_bin, perms)?;
+    }
+
     let service_content = format!(
         r#"[Unit]
 Description=Agentrete Memory Server (MCP)
 After=network.target
 
 [Service]
-ExecStart={binary} mcp --port {port}
+ExecStart={stable_bin} mcp --port {port}
 Restart=on-failure
 RestartSec=2
 Environment=RUST_LOG=info
@@ -50,7 +64,7 @@ Environment=RUST_LOG=info
 [Install]
 WantedBy=default.target
 "#,
-        binary = binary,
+        stable_bin = stable_bin,
         port = port
     );
 
