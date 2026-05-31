@@ -3,9 +3,8 @@
 
 use clap::{Parser, Subcommand};
 
-#[cfg(not(any(target_env = "msvc", target_os = "windows")))]
 #[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod cli;
 mod config;
