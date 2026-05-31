@@ -60,7 +60,6 @@ const SEED_RULES: &[(&str, &str, &str)] = &[
 use crate::storage::Store;
 use crate::types;
 use anyhow::Result;
-use sqlx::SqlitePool;
 
 pub(crate) async fn cmd_seed(store: &Store) -> Result<()> {
     let rules = SEED_RULES;
