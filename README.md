@@ -22,7 +22,7 @@ cargo build
 ./target/debug/agentrete setup
 ```
 
-Or via npm (planned):
+Or via npm:
 
 ```bash
 npx agentrete setup
