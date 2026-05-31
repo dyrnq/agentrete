@@ -33,7 +33,7 @@ npx agentrete setup
 | Command | Description |
 |---------|-------------|
 | `save` | Save a memory |
-| `search` | Semantic search (BM25 + vector hybrid) |
+| `search` | Semantic search (vec0 KNN + FTS5 BM25 → RRF fusion) |
 | `list` | List recent memories |
 | `stats` | Database statistics |
 | `forget` | Delete by ID |
@@ -43,7 +43,7 @@ npx agentrete setup
 | `setup` | Auto-detect AI tools and configure MCP + hooks |
 | `daemon` | OS-native background service (systemd/launchd) |
 | `mcp` | Start MCP server (HTTP or stdio) |
-| `scan` | Scan codebase and build knowledge graph (requires ast-grep) |
+| `scan` | Scan codebase and build knowledge graph |
 
 ## MCP Tools
 
@@ -58,7 +58,6 @@ npx agentrete setup
 | `kg_query` | Knowledge graph query (neighbors, path, subgraph by predicate/direction/project) |
 | `kg_scan` | Start background codebase scan with ast-grep (incremental via file hash cache) |
 | `kg_scan_status` | Check if a background scan is running |
-| `kg_watch` | Start/stop file watcher for auto-scan on code changes |
 
 ## Features
 
@@ -68,7 +67,7 @@ npx agentrete setup
 - **Cross-platform**: Linux, macOS, Windows — all with native hooks (bash/PowerShell)
 - **MCP protocol**: 2024-11-05, 2025-06-18, 2025-11-25 with version negotiation
 - **Hooks**: 9 Codex events + 2 Claude Code events, all embedded at compile time
-- **Model auto-download**: First `save`/`search` downloads embedding model lazily
+- **Model distillation**: 9 sentence-transformers models distillable to Model2Vec (10-497MB)
 - **8 agents supported**: Codex CLI, Claude Code, Cursor, Zed, OpenCode, Windsurf, Goose, Gemini CLI
 
 ## Architecture
@@ -84,7 +83,7 @@ Codex / Claude Code / Cursor / Zed / ...
         │
         └── Knowledge Graph ── SQLite kg_triples + petgraph (in-memory)
                                code scan via ast-grep (16 languages)
-                               kg_query / kg_scan / kg_watch
+                               kg_query / kg_scan (with optional watch)
 ```
 
 ## Memory Lifecycle
@@ -97,17 +96,29 @@ Codex / Claude Code / Cursor / Zed / ...
 
 ### Knowledge Graph (optional, enabled via config)
 1. **Scan** — `agentrete scan .` or `kg_scan` MCP → ast-grep scans codebase → SPO triples stored in SQLite
-2. **Watch** — `kg_watch start` → automatic re-scan on file changes (incremental via hash cache)
+2. **Watch** — `kg_scan` with `watch: true` → automatic re-scan on file changes (incremental via hash cache)
 3. **Query** — `kg_query` → petgraph in-memory traversal (neighbors, shortest path, filtered by predicate/direction/project)
 
 ## Configuration
 
-| Env Var | Default | Description |
-|---------|---------|-------------|
-| `AGENTRETE_URL` | `http://127.0.0.1:9092` | MCP server URL |
-| `AGENTRETE_MODEL` | `BAAI/bge-small-zh-v1.5` | Embedding model (model2vec) |
-| `AGENTRETE_NO_EMBED` | — | Disable embedding (BM25 only) |
-| `HF_ENDPOINT` | `https://hf-mirror.com` | HuggingFace mirror |
+Configuration via `~/.agentrete/config.toml` (TOML/YAML/JSON, env override with `AGENTRETE__*` prefix):
+
+```toml
+port = 9092
+
+[embedding]
+backend = "model2vec"   # "none" | "model2vec" | "remote"
+
+[embedding.model2vec]
+model = "BAAI/bge-small-zh-v1.5"
+dims = 256
+
+# [embedding.remote]
+# url = "http://localhost:11434"
+# model = "qwen3-embedding:latest"
+```
+
+See [config-reference.toml](docs/config-reference.toml) for all options.
 
 ## Docs
 
