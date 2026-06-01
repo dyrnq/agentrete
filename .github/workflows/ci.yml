@@ -65,8 +65,10 @@ jobs:
       - name: Build (debug)
         run: cargo build --target ${{ matrix.target }}
       - name: Smoke test
-        if: runner.os != 'Windows'
-        run: bash scripts/smoke-test.sh ./target/${{ matrix.target }}/debug/agentrete 19099
+        run: |
+          BIN="./target/${{ matrix.target }}/debug/agentrete"
+          case "${{ matrix.target }}" in *windows*) BIN="${BIN}.exe" ;; esac
+          bash scripts/smoke-test.sh "$BIN" 19099
 
   test:
     needs: [cross-check]
