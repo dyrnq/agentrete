@@ -336,15 +336,119 @@ impl Store {
             .bind(branch)
             .execute(&self.pool)
             .await?;
+        // Also clear scan cache for this project+branch
+        sqlx::query("DELETE FROM kg_scan_cache WHERE project IS ?1 AND branch IS ?2")
+            .bind(project)
+            .bind(branch)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
     /// Scan a codebase directory with tree-sitter and import results into KG.
+    /// Incremental: skips files whose hash+size+mtime haven't changed since last scan.
     pub async fn scan_codebase(&self, root: &std::path::Path) -> Result<(usize, usize)> {
-        let (symbols, relations) = crate::knowledge_graph::scanner::scan_directory(root)?;
-        let now = chrono::Utc::now().to_rfc3339();
+        use std::hash::{Hash, Hasher};
         let project = detect_project_for_scan(root);
         let branch = detect_git_branch(root);
+
+        // ── Incremental: walk dir, compute hash, check cache ─────────────────
+        let mut changed_files: Vec<std::path::PathBuf> = Vec::new();
+        let mut cached_count = 0u64;
+        let source_exts = &[
+            "rs", "py", "js", "ts", "tsx", "jsx", "go", "java",
+            "c", "cpp", "h", "hpp", "cs", "rb", "php", "swift",
+            "kt", "scala", "css", "html", "json", "toml", "yaml", "yml",
+            "md", "sql", "sh", "bash", "proto",
+        ];
+
+        for entry in walkdir::WalkDir::new(root)
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                !name.starts_with('.')
+                    && name != "target"
+                    && name != "node_modules"
+                    && name != "dist"
+                    && name != "build"
+                    && name != "__pycache__"
+                    && name != "vendor"
+            })
+            .filter_map(|e| e.ok())
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !source_exts.contains(&ext) {
+                continue;
+            }
+
+            let Ok(content_bytes) = std::fs::read(path) else { continue };
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            content_bytes.hash(&mut hasher);
+            let hash_str = hasher.finish().to_string();
+            let file_size = content_bytes.len() as i64;
+            let mtime = std::fs::metadata(path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+
+            let rel_path = path
+                .strip_prefix(root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .to_string();
+
+            let cached: Option<(String, i64, i64)> = sqlx::query_as(
+                "SELECT content_hash, file_size, modified_at FROM kg_scan_cache                  WHERE file_path = ?1 AND project IS ?2 AND branch IS ?3"
+            )
+            .bind(&rel_path)
+            .bind(&project)
+            .bind(&branch)
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten();
+
+            let hit = cached.as_ref().is_some_and(|(ch, cs, cm)| {
+                *ch == hash_str && *cs == file_size && *cm == mtime
+            });
+            if hit {
+                cached_count += 1;
+                continue;
+            }
+
+            let _ = sqlx::query(
+                "INSERT OR REPLACE INTO kg_scan_cache                  (file_path, project, branch, content_hash, file_size, modified_at)                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+            )
+            .bind(&rel_path)
+            .bind(&project)
+            .bind(&branch)
+            .bind(&hash_str)
+            .bind(file_size)
+            .bind(mtime)
+            .execute(&self.pool)
+            .await;
+
+            changed_files.push(path.to_path_buf());
+        }
+
+        log::info!(
+            "kg_scan: {} changed, {} cached (project={:?}, branch={:?})",
+            changed_files.len(), cached_count, project, branch
+        );
+
+        // ── Scan only changed files ─────────────────────────────────────────
+        let (symbols, relations) = if changed_files.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            crate::knowledge_graph::scanner::scan_files(&changed_files)?
+        };
+        let now = chrono::Utc::now().to_rfc3339();
 
         for sym in &symbols {
             let id = format!("node_{}", uuid::Uuid::new_v4());

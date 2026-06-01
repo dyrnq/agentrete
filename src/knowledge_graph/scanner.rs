@@ -157,6 +157,7 @@ pub fn scan_files(files: &[std::path::PathBuf]) -> Result<(Vec<Symbol>, Vec<Rela
 }
 
 /// Scan a directory using ast-grep CLI.
+#[allow(dead_code)]
 pub fn scan_directory(root: &Path) -> Result<(Vec<Symbol>, Vec<Relation>)> {
     scan_directory_inner(root, None)
 }

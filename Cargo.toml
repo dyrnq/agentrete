@@ -39,6 +39,7 @@ notify = "7.0.0"
 
 
 tempfile = "3"
+walkdir = "2.5.0"
 
 [profile.dev.build-override]
 opt-level = 3
