@@ -519,6 +519,8 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
             }
         }
         "ping" => jsonrpc_ok(&id, serde_json::json!({})),
+        // MCP notifications: return null to signal "no response"
+        "notifications/initialized" | "notifications/cancelled" => serde_json::Value::Null,
         _ => jsonrpc_err(&Value::Null, -32601, &format!("Unknown: {}", method)),
     }
 }

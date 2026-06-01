@@ -1,5 +1,5 @@
 use crate::storage::Store;
-use axum::{extract::State, routing::post, Router};
+use axum::{extract::State, response::IntoResponse, routing::post, Router};
 
 use serde_json::Value;
 use std::sync::Arc;
@@ -27,7 +27,10 @@ async fn http_mcp_handler(
 ) -> impl axum::response::IntoResponse {
     let request: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
     // Inject top-level id into params so handle_rpc can return it
-    let mut req_params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);
+    let mut req_params = request
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     if let Some(id) = request.get("id") {
         if !id.is_null() {
             if let Some(obj) = req_params.as_object_mut() {
@@ -46,7 +49,11 @@ async fn http_mcp_handler(
         &req_params,
     )
     .await;
-    axum::Json(result)
+    if result.is_null() {
+        // Notification: no response expected
+        return axum::http::StatusCode::ACCEPTED.into_response();
+    }
+    axum::Json(result).into_response()
 }
 
 async fn http_health() -> axum::Json<Value> {
