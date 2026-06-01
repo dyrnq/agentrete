@@ -28,7 +28,7 @@ pub async fn run_stdio(store: Store) -> anyhow::Result<()> {
                 continue;
             }
         };
-        let result = handle_rpc(&store, rq["method"].as_str().unwrap_or(""), &rq["params"]).await;
+        let result = handle_rpc(&store, rq["method"].as_str().unwrap_or(""), &rq).await;
         let _ = stdout
             .write_all(
                 serde_json::to_string(&result)

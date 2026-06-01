@@ -26,10 +26,24 @@ async fn http_mcp_handler(
     body: String,
 ) -> impl axum::response::IntoResponse {
     let request: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+    // Inject top-level id into params so handle_rpc can return it
+    let mut req_params = request.get("params").cloned().unwrap_or(serde_json::Value::Null);
+    if let Some(id) = request.get("id") {
+        if !id.is_null() {
+            if let Some(obj) = req_params.as_object_mut() {
+                obj.insert("id".to_string(), id.clone());
+            } else {
+                let mut obj = serde_json::Map::new();
+                obj.insert("id".to_string(), id.clone());
+                obj.insert("params".to_string(), req_params);
+                req_params = serde_json::Value::Object(obj);
+            }
+        }
+    }
     let result = handle_rpc(
         &store,
         request["method"].as_str().unwrap_or(""),
-        &request["params"],
+        &req_params,
     )
     .await;
     axum::Json(result)
