@@ -1,9 +1,86 @@
 use crate::storage::Store;
-use rmcp::{handler::server::ServerHandler, model::*, service::serve_server};
+use rmcp::{handler::server::{router::tool::ToolRouter, ServerHandler}, model::*, service::serve_server, tool, tool_handler, tool_router};
 use std::sync::Arc;
+
+
+// ── Tool parameter structs ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct MemorySearchParams {
+    #[schemars(description = "Search query")]
+    pub query: String,
+    #[schemars(description = "Max results, default 10")]
+    pub limit: Option<u8>,
+    #[schemars(description = "Filter by memory type")]
+    pub r#type: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct MemorySaveParams {
+    #[schemars(description = "Memory content")]
+    pub content: String,
+    #[schemars(description = "Type: rule/decision/pattern/bug/fact")]
+    pub r#type: Option<String>,
+    #[schemars(description = "Comma-separated tags")]
+    pub tags: Option<String>,
+    #[schemars(description = "Source file path")]
+    pub source_file: Option<String>,
+    #[schemars(description = "Project name (auto-detected if empty)")]
+    pub project: Option<String>,
+    #[schemars(description = "Preview only, don't save")]
+    pub dry_run: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct MemoryListParams {
+    #[schemars(description = "Max results")]
+    pub limit: Option<u8>,
+    #[schemars(description = "Filter by type")]
+    pub r#type: Option<String>,
+    #[schemars(description = "Offset for pagination")]
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct MemoryForgetParams {
+    #[schemars(description = "Memory ID")]
+    pub id: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct MemoryCompactParams {
+    #[schemars(description = "Mode: exact or semantic")]
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct KgScanParams {
+    #[schemars(description = "Project path")]
+    pub path: String,
+    #[schemars(description = "Force re-scan (clear cache)")]
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct KgQueryParams {
+    #[schemars(description = "Mode: neighbors, path, subgraph")]
+    pub mode: String,
+    #[schemars(description = "Entity to query")]
+    pub entity: Option<String>,
+    #[schemars(description = "Target entity (for path mode)")]
+    pub target: Option<String>,
+    #[schemars(description = "Filter by predicate")]
+    pub predicate: Option<String>,
+    #[schemars(description = "Direction: outgoing, incoming, both")]
+    pub direction: Option<String>,
+    #[schemars(description = "Filter by project")]
+    pub project: Option<String>,
+}
+
 
 pub struct AgentreteServer {
     pub store: Arc<Store>,
+    tool_router: ToolRouter<Self>,
 }
 
 // ── Tool: memory_stats ──────────────────────────────────────────────────────
@@ -37,6 +114,7 @@ impl AgentreteServer {
 }
 
 // ── ServerHandler ───────────────────────────────────────────────────────────
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for AgentreteServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
@@ -47,6 +125,7 @@ impl ServerHandler for AgentreteServer {
 pub async fn run(store: Store) -> anyhow::Result<()> {
     let server = AgentreteServer {
         store: Arc::new(store),
+        tool_router: AgentreteServer::tool_router(),
     };
     log::info!("agentrete MCP (rmcp SDK, stdio)");
     let svc = serve_server(server, rmcp::transport::io::stdio()).await?;
@@ -67,11 +146,14 @@ pub async fn run_http(store: Store, config: &crate::config::Config) -> anyhow::R
 
     // Session manager: in-memory (stateless for our use case)
     let session_manager = Arc::new(LocalSessionManager::default());
-    let svc_config = StreamableHttpServerConfig::default();
+    let svc_config = StreamableHttpServerConfig::default()
+        .with_stateful_mode(false)
+        .with_json_response(true);
 
     let service = StreamableHttpService::new(
         move || Ok(AgentreteServer {
             store: store.clone(),
+            tool_router: AgentreteServer::tool_router(),
         }),
         session_manager,
         svc_config,
