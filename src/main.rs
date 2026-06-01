@@ -15,7 +15,7 @@ mod types;
 #[command(
     name = "agentrete",
     about = "Local-first persistent memory for AI coding agents",
-    version = env!("CARGO_PKG_VERSION")
+    version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_SHORT_HASH"), ")")
 )]
 struct Cli {
     /// Path to config file (TOML format)
