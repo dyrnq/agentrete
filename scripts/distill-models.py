@@ -7,11 +7,11 @@
 # ///
 """Distill sentence-transformers models to Model2Vec at multiple dimensions.
 Usage:
-  uv run .dev/distill-models.py                    # all models, all dims
-  uv run .dev/distill-models.py gte-multi          # single model
-  uv run .dev/distill-models.py gte-multi 256 512  # model + specific dims
-  uv run .dev/distill-models.py -E bge-m3          # exclude model(s)
-  uv run .dev/distill-models.py -E bge-m3 minilm   # exclude multiple
+  uv run scripts/distill-models.py                    # all models, all dims
+  uv run scripts/distill-models.py gte-multi          # single model
+  uv run scripts/distill-models.py gte-multi 256 512  # model + specific dims
+  uv run scripts/distill-models.py -E bge-m3          # exclude model(s)
+  uv run scripts/distill-models.py -E bge-m3 minilm   # exclude multiple
 
 Models:
   bge-small     BAAI/bge-small-zh-v1.5                 512  → 256, 512       (~10MB)
