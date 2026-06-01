@@ -221,7 +221,10 @@ impl Store {
         sqlx::query("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, data TEXT, metadata TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY, content TEXT, tool_name TEXT, session_id TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
         // Knowledge Graph triples (optional, only created if config enables it)
-        let _ = sqlx::query("CREATE TABLE IF NOT EXISTS kg_triples (id TEXT PRIMARY KEY, subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL, confidence REAL DEFAULT 1.0, source_memory_id TEXT, project TEXT, created_at TEXT NOT NULL)").execute(&self.pool).await;
+        let _ = sqlx::query("CREATE TABLE IF NOT EXISTS kg_triples (id TEXT PRIMARY KEY, subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL, confidence REAL DEFAULT 1.0, source_memory_id TEXT, project TEXT, branch TEXT, created_at TEXT NOT NULL)").execute(&self.pool).await;
+        let _ = sqlx::query("ALTER TABLE kg_triples ADD COLUMN branch TEXT")
+            .execute(&self.pool)
+            .await;
         let _ =
             sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_subject ON kg_triples(subject)")
                 .execute(&self.pool)
@@ -244,7 +247,7 @@ impl Store {
             sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_project ON kg_triples(project)")
                 .execute(&self.pool)
                 .await;
-        let _ = sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_triples_spo ON kg_triples(subject, predicate, object, project)").execute(&self.pool).await;
+        let _ = sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_triples_spo ON kg_triples(subject, predicate, object, project, branch)").execute(&self.pool).await;
         Ok(())
     }
 
@@ -258,11 +261,12 @@ impl Store {
         confidence: f32,
         source_memory_id: Option<String>,
         project: Option<String>,
+        branch: Option<String>,
     ) -> Result<String> {
         let id = format!("triple_{}", uuid::Uuid::new_v4());
         let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,source_memory_id,project,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)")
-            .bind(&id).bind(subject).bind(predicate).bind(object).bind(confidence).bind(&source_memory_id).bind(&project).bind(&now)
+        sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,source_memory_id,project,branch,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)")
+            .bind(&id).bind(subject).bind(predicate).bind(object).bind(confidence).bind(&source_memory_id).bind(&project).bind(&branch).bind(&now)
             .execute(&self.pool).await?;
         self.graph
             .add_triple_local(subject, predicate, object, confidence, source_memory_id);
@@ -274,22 +278,23 @@ impl Store {
         let (symbols, relations) = crate::knowledge_graph::scanner::scan_directory(root)?;
         let now = chrono::Utc::now().to_rfc3339();
         let project = detect_project_for_scan(root);
+        let branch = detect_git_branch(root);
 
         for sym in &symbols {
             let id = format!("node_{}", uuid::Uuid::new_v4());
             let _ = sqlx::query(
-                "INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'label',?3,1.0,?4,?5)"
+                "INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'label',?3,1.0,?4,?5,?6)"
             )
-            .bind(&id).bind(&sym.name).bind(&sym.kind).bind(&project).bind(&now)
+            .bind(&id).bind(&sym.name).bind(&sym.kind).bind(&project).bind(&branch).bind(&now)
             .execute(&self.pool).await;
         }
 
         for rel in &relations {
             let id = format!("rel_{}", uuid::Uuid::new_v4());
             let _ = sqlx::query(
-                "INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6)"
+                "INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6,?7)"
             )
-            .bind(&id).bind(&rel.source).bind(&rel.relation).bind(&rel.target).bind(&project).bind(&now)
+            .bind(&id).bind(&rel.source).bind(&rel.relation).bind(&rel.target).bind(&project).bind(&branch).bind(&now)
             .execute(&self.pool).await;
         }
 
@@ -317,7 +322,7 @@ impl Store {
             .is_ok()
         {
             if let Some(ref git_root) = detect_project_git_root(root) {
-                if let Err(e) = self.scan_git_history(git_root, &project).await {
+                if let Err(e) = self.scan_git_history(git_root, &project, &branch).await {
                     log::warn!("kg_scan: git history scan failed: {e}");
                 }
             }
@@ -424,6 +429,7 @@ impl Store {
         &self,
         git_root: &std::path::Path,
         project: &Option<String>,
+        branch: &Option<String>,
     ) -> Result<()> {
         use std::process::Command;
         let now = chrono::Utc::now().to_rfc3339();
@@ -449,13 +455,13 @@ impl Store {
             if line.starts_with("COMMIT ") {
                 if !commit_hash.is_empty() && in_files {
                     let cid = format!("commit:{}", &commit_hash[..8]);
-                    let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(project).bind(&now).execute(&self.pool).await;
+                    let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
                     if !commit_msg.is_empty() {
                         let ms: String = commit_msg.chars().take(80).collect();
-                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(project).bind(&now).execute(&self.pool).await;
+                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
                     }
                     if !commit_author.is_empty() {
-                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(project).bind(&now).execute(&self.pool).await;
+                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
                     }
                 }
                 let parts: Vec<&str> = line.split(' ').collect();
@@ -475,18 +481,18 @@ impl Store {
                     .file_stem()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
-                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(format!("file:{}", stem)).bind("modified_in").bind(&cid).bind(project).bind(&now).execute(&self.pool).await;
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6,?7)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(format!("file:{}", stem)).bind("modified_in").bind(&cid).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
             }
         }
         if !commit_hash.is_empty() && in_files {
             let cid = format!("commit:{}", &commit_hash[..8]);
-            let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(project).bind(&now).execute(&self.pool).await;
+            let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
             if !commit_msg.is_empty() {
                 let ms: String = commit_msg.chars().take(80).collect();
-                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(project).bind(&now).execute(&self.pool).await;
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
             }
             if !commit_author.is_empty() {
-                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(project).bind(&now).execute(&self.pool).await;
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
             }
         }
         Ok(())
@@ -708,10 +714,10 @@ impl Store {
         let lim = limit.min(MAX_LIMIT) as i64;
         let rows: Vec<SearchRow> = if let Some(t) = memory_type {
             sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?3")
-                .bind(query).bind(t).bind(lim).fetch_all(&self.pool).await?
+                .bind(sanitize_fts_query(query)).bind(t).bind(lim).fetch_all(&self.pool).await?
         } else {
             sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?2")
-                .bind(query).bind(lim).fetch_all(&self.pool).await?
+                .bind(sanitize_fts_query(query)).bind(lim).fetch_all(&self.pool).await?
         };
         Ok(rows
             .into_iter()
@@ -746,10 +752,10 @@ impl Store {
         let recall_limit = (limit as i64 * RECALL_MULTIPLIER as i64).min(MAX_LIMIT as i64);
         let rows: Vec<SearchRow> = if let Some(t) = memory_type {
             sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.type=?2 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?3")
-                .bind(query).bind(t).bind(recall_limit).fetch_all(&self.pool).await?
+                .bind(sanitize_fts_query(query)).bind(t).bind(recall_limit).fetch_all(&self.pool).await?
         } else {
             sqlx::query_as("SELECT m.id, m.type, m.content, m.tags, m.files, m.project, m.source_file, m.importance, m.created_at, m.embedding FROM memories m INNER JOIN memories_fts f ON m.rowid=f.rowid WHERE memories_fts MATCH ?1 AND m.deleted_at IS NULL ORDER BY rank LIMIT ?2")
-                .bind(query).bind(recall_limit).fetch_all(&self.pool).await?
+                .bind(sanitize_fts_query(query)).bind(recall_limit).fetch_all(&self.pool).await?
         };
 
         // Step 3: Cosine rerank (only rows with embeddings)
@@ -1135,6 +1141,48 @@ impl Store {
         Ok(ids.len())
     }
 
+    /// Start a new session. Returns session ID.
+    pub async fn start_session(
+        &self,
+        data: Option<&str>,
+        metadata: Option<&str>,
+    ) -> Result<String> {
+        let id = format!("sess_{}", Uuid::new_v4());
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO sessions (id, data, metadata, created_at) VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(&id)
+        .bind(data)
+        .bind(metadata)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    /// Log a tool observation.
+    pub async fn log_observation(
+        &self,
+        tool_name: &str,
+        content: &str,
+        session_id: Option<&str>,
+    ) -> Result<String> {
+        let id = format!("obs_{}", Uuid::new_v4());
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO observations (id, content, tool_name, session_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)"
+        )
+        .bind(&id)
+        .bind(content)
+        .bind(tool_name)
+        .bind(session_id)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
     /// Gracefully shut down the store: flush WAL, close pool.
     pub async fn shutdown(self) {
         let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -1262,8 +1310,39 @@ fn detect_project_for_scan(root: &std::path::Path) -> Option<String> {
 }
 
 // ─── Re-embed integration tests ──────────────────────────────────────────────
-#[cfg(test)]
+
+fn detect_git_branch(root: &std::path::Path) -> Option<String> {
+    std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                let b = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if b.is_empty() {
+                    None
+                } else {
+                    Some(b)
+                }
+            } else {
+                None
+            }
+        })
+}
+
+fn sanitize_fts_query(query: &str) -> String {
+    // Replace problematic characters that FTS5 interprets as operators
+    // - hyphen: can be seen as column:term separator
+    // - colon: explicit column prefix
+    // - parentheses: grouping operators
+    let mut s = query.to_string();
+    s = s.replace('-', " ");
+    s = s.replace(':', " ");
+    s
+}
 #[allow(clippy::field_reassign_with_default)]
+
 mod tests {
     use tempfile::tempdir;
 
@@ -1369,6 +1448,8 @@ mod tests {
         let git_dir = tmp.path().join("test_repo");
         std::fs::create_dir(&git_dir).unwrap();
 
+        /// which fails when the column doesn't exist. We replace hyphens and
+        /// other FTS5 special chars that could be misinterpreted.
         // Initialize git repo
         Command::new("git")
             .args(["init"])
@@ -1421,7 +1502,10 @@ mod tests {
         let store = crate::storage::Store::open(&cfg, None).await.unwrap();
 
         // Run git history scan
-        store.scan_git_history(&git_dir, &None).await.unwrap();
+        store
+            .scan_git_history(&git_dir, &None, &None)
+            .await
+            .unwrap();
 
         // Query through store's pool
         let pool = store.pool.clone();

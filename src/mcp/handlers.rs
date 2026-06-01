@@ -80,6 +80,15 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                 "memory_save" => {
                     let c = a["content"].as_str().unwrap_or("");
                     let dry_run = a["dry_run"].as_bool().unwrap_or(false);
+                    // Log observation (non-blocking)
+                    let store_obs = store.clone();
+                    let content_obs = c.to_string();
+                    let t_obs = a["type"].as_str().unwrap_or("").to_string();
+                    tokio::spawn(async move {
+                        let _ = store_obs
+                            .log_observation("memory_save", &content_obs, None)
+                            .await;
+                    });
                     if dry_run {
                         let preview_id = format!("mem_{}", uuid::Uuid::new_v4());
                         return jsonrpc_ok(
@@ -114,6 +123,13 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                 }
                 "memory_search" => {
                     let q = a["query"].as_str().unwrap_or("");
+                    let store_obs = store.clone();
+                    let query_obs = q.to_string();
+                    tokio::spawn(async move {
+                        let _ = store_obs
+                            .log_observation("memory_search", &query_obs, None)
+                            .await;
+                    });
                     let l = a["limit"].as_u64().unwrap_or(10) as u8;
                     match store.search(q, l, a["type"].as_str()).await {
                         Ok(r) => {

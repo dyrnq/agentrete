@@ -3,8 +3,11 @@ use axum::{extract::State, routing::post, Router};
 
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use super::handlers::handle_rpc;
+
+static START_TIME: OnceLock<std::time::Instant> = OnceLock::new();
 
 pub async fn run_http(store: Store, config: &crate::config::Config) -> anyhow::Result<()> {
     let port = config.port;
@@ -33,9 +36,15 @@ async fn http_mcp_handler(
 }
 
 async fn http_health() -> axum::Json<Value> {
+    let start = START_TIME.get_or_init(std::time::Instant::now);
+    let uptime = start.elapsed().as_secs();
     axum::Json(serde_json::json!({
-        "service":"agentrete",
-        "status":"ok",
-        "version":env!("CARGO_PKG_VERSION")
+        "service": "agentrete",
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "transport": "http",
+        "pid": std::process::id(),
+        "platform": format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        "uptime_secs": uptime
     }))
 }
