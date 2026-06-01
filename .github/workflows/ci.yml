@@ -92,5 +92,7 @@ jobs:
         run: cargo build --release
       - name: Run tests
         run: cargo test
-      - name: Daemon smoke test
+      - name: Smoke test (debug)
         run: bash scripts/smoke-test.sh ./target/debug/agentrete 19092
+      - name: Smoke test (release)
+        run: bash scripts/smoke-test.sh ./target/release/agentrete 19093
