@@ -85,3 +85,38 @@ jobs:
         run: cargo build --release
       - name: Run tests
         run: cargo test
+      - name: Daemon smoke test
+        run: |
+          mkdir -p /tmp/agentrete-test
+          cat > /tmp/agentrete-test/config.toml << 'TOML'
+          port = 19092
+          db_dir = "/tmp/agentrete-test"
+
+          [embedding]
+          backend = "none"
+
+          [knowledge_graph]
+          enabled = false
+          TOML
+
+          cargo run -- -c /tmp/agentrete-test/config.toml mcp --port 19092 &
+          PID=$!
+
+          for i in $(seq 1 15); do
+            if curl -s http://127.0.0.1:19092/ >/dev/null 2>&1; then
+              echo "Daemon ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+          curl -s http://127.0.0.1:19092/ | grep -q '"status":"ok"' && echo "Health OK" || { echo "Health FAIL"; kill $PID; exit 1; }
+
+          SAVE=$(curl -s -X POST http://127.0.0.1:19092/ -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"memory_save","arguments":{"content":"ci smoke test","type":"test"}}}')
+          echo "$SAVE" | grep -q '"Saved:"' && echo "Save OK" || { echo "Save FAIL: $SAVE"; kill $PID; exit 1; }
+
+          STATS=$(curl -s -X POST http://127.0.0.1:19092/ -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"memory_stats","arguments":{}}}')
+          echo "$STATS" | grep -q '"Memories: 1"' && echo "Stats OK" || { echo "Stats FAIL: $STATS"; kill $PID; exit 1; }
+
+          kill $PID
+          echo "Daemon smoke test PASSED"
