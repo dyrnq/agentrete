@@ -262,9 +262,13 @@ pub async fn run_http(store: Store, config: &crate::config::Config) -> anyhow::R
     let svc = StreamableHttpService::new(move || Ok(state.clone()), session_manager, svc_config);
     let svc = AcceptFixService::new(svc);
 
-    // Serve at root (/) to match v1 MCP endpoint path used by Codex config.
-    // Can't use nest_service("/") — axum panics. Use route_service("/").
-    let app = axum::Router::new().route_service("/", svc);
+    // GET / → health check, POST / → MCP Streamable HTTP (rmcp).
+    // Use separate Route for health and MCP service since MethodRouter
+    // combination with service types can be fragile.
+    // GET /health → health check, POST /mcp → MCP Streamable HTTP (rmcp)
+    let app = axum::Router::new()
+        .route("/health", axum::routing::get(health))
+        .route("/mcp", axum::routing::post_service(svc));
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
     axum::serve(listener, app).await?;
     Ok(())
@@ -317,6 +321,17 @@ where
         let fut = self.inner.call(req);
         Box::pin(fut)
     }
+}
+
+async fn health() -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "service": "agentrete",
+        "transport": "http",
+        "pid": std::process::id(),
+        "platform": std::env::consts::OS,
+        "uptime_secs": 0,
+    }))
 }
 
 pub async fn run(store: Store) -> anyhow::Result<()> {
