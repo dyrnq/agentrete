@@ -89,14 +89,13 @@ pub struct Model2VecConfig {
 /// MCP server configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct McpConfig {
-    /// MCP implementation: "2024" (legacy hand-rolled) or "2025" (rmcp SDK).
-    /// Default: "2024" for backward compatibility.
-    #[serde(default = "default_mcp_version")]
-    pub version: String,
+    /// MCP backend: "native" (hand-rolled, default) or "sdk" (rmcp crate).
+    #[serde(default = "default_mcp_backend")]
+    pub backend: String,
 }
 
-fn default_mcp_version() -> String {
-    "2024".to_string()
+fn default_mcp_backend() -> String {
+    "native".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -163,7 +162,7 @@ fn default_hf_endpoint() -> String {
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
-            backend: EmbeddingBackend::Model2Vec,
+            backend: EmbeddingBackend::None,
             model2vec: Model2VecConfig {
                 model: "BAAI/bge-small-zh-v1.5".to_string(),
                 dims: 512,
@@ -319,7 +318,7 @@ mod tests {
     fn test_defaults() {
         let cfg = Config::default();
         assert_eq!(cfg.port, 9092);
-        assert_eq!(cfg.embedding.backend, EmbeddingBackend::Model2Vec);
+        assert_eq!(cfg.embedding.backend, EmbeddingBackend::None);
         assert_eq!(cfg.embedding.model2vec.model, "BAAI/bge-small-zh-v1.5");
         assert_eq!(cfg.embedding.model2vec.dims, 512);
     }

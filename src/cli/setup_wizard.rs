@@ -238,7 +238,7 @@ fn configure_json(home: &Path, config_path: &str, root_key: &str) -> Result<()> 
         serde_json::json!({})
     };
 
-    let url = format!("http://127.0.0.1:{}/", DEFAULT_PORT);
+    let url = format!("http://127.0.0.1:{}/mcp", DEFAULT_PORT);
 
     // Ensure root key and agentrete entry exist
     if config.get(root_key).is_none() || config[root_key].is_null() {
@@ -268,7 +268,7 @@ fn configure_codex(home: &Path) -> Result<()> {
         .append(true)
         .create(true)
         .open(&config_path)?;
-    let url = format!("http://127.0.0.1:{}/", DEFAULT_PORT);
+    let url = format!("http://127.0.0.1:{}/mcp", DEFAULT_PORT);
     writeln!(f, "\n[mcp_servers.agentrete]")?;
     writeln!(f, "type = \"http\"")?;
     writeln!(f, "url = \"{url}\"")?;
@@ -293,7 +293,7 @@ fn configure_opencode(home: &Path, _bin: &str) -> Result<()> {
         serde_json::json!({})
     };
 
-    let url = format!("http://127.0.0.1:{}/", DEFAULT_PORT);
+    let url = format!("http://127.0.0.1:{}/mcp", DEFAULT_PORT);
 
     if config["mcpServers"].is_null() {
         config["mcpServers"] = serde_json::json!({});
@@ -322,7 +322,7 @@ fn configure_goose(home: &Path, _bin: &str) -> Result<()> {
 
     // Only add if not already present
     if !yaml.contains("agentrete") {
-        let url = format!("http://127.0.0.1:{}/", DEFAULT_PORT);
+        let url = format!("http://127.0.0.1:{}/mcp", DEFAULT_PORT);
         let leading_newline = if yaml.ends_with('\n') { "" } else { "\n" };
         let entry = format!(
             "{ld}  agentrete:\n    name: agentrete\n    type: http\n    url: \"{url}\"\n    enabled: true\n",

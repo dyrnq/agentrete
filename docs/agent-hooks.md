@@ -344,7 +344,7 @@ exit 0
 
 1. Check hook scripts exist: `ls ~/.codex/plugins/agentrete/hooks/scripts/`
 2. Check permissions: `chmod +x ~/.codex/plugins/agentrete/hooks/scripts/*.sh`
-3. Check agentrete MCP is running: `curl http://127.0.0.1:9092/`
+3. Check agentrete MCP is running: `curl http://127.0.0.1:9092/health`
 4. Check hook config is registered: `cat ~/.codex/plugins/agentrete/hooks/hooks.codex.json`
 5. Run a hook script manually to test:
    ```bash

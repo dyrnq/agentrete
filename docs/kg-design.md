@@ -137,13 +137,13 @@ agentrete scan /path/to/project
 agentrete mcp --port 9092
 
 # 扫描 + 文件监控
-curl http://127.0.0.1:9092/ -d '{"method":"tasks/send","params":{"name":"kg_scan","arguments":{"path":".","watch":true}}}'
+curl -s -X POST http://127.0.0.1:9092/mcp -H "Content-Type: application/json" -d '{"method":"tasks/send","params":{"name":"kg_scan","arguments":{"path":".","watch":true}}}'
 
 # 查询 task 状态
-curl http://127.0.0.1:9092/ -d '{"method":"tasks/status","params":{"id":"task_0001"}}'
+curl -s -X POST http://127.0.0.1:9092/mcp -H "Content-Type: application/json" -d '{"method":"tasks/status","params":{"id":"task_0001"}}'
 
 # 取消 task
-curl http://127.0.0.1:9092/ -d '{"method":"tasks/cancel","params":{"id":"task_0001"}}'
+curl -s -X POST http://127.0.0.1:9092/mcp -H "Content-Type: application/json" -d '{"method":"tasks/cancel","params":{"id":"task_0001"}}'
 ```
 
 ## 实现历程

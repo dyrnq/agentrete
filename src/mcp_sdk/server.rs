@@ -252,7 +252,7 @@ pub async fn run_http(store: Store, config: &crate::config::Config) -> anyhow::R
 
     let port = config.port;
     let state = AgentreteServer::new(store);
-    log::info!("agentrete MCP (rmcp SDK, http) on 127.0.0.1:{port}");
+    log::info!("agentrete MCP (sdk, http) on 127.0.0.1:{port}");
 
     let session_manager = Arc::new(LocalSessionManager::default());
     let svc_config = StreamableHttpServerConfig::default()
@@ -335,7 +335,7 @@ async fn health() -> axum::Json<serde_json::Value> {
 }
 
 pub async fn run(store: Store) -> anyhow::Result<()> {
-    log::info!("agentrete MCP (rmcp SDK, stdio)");
+    log::info!("agentrete MCP (sdk, stdio)");
     let svc = serve_server(AgentreteServer::new(store), rmcp::transport::io::stdio()).await?;
     svc.waiting().await?;
     Ok(())

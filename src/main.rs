@@ -441,8 +441,8 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
                 None
             };
 
-            let result = if cfg.mcp.version == "2025" {
-                log::info!("Using MCP v2 (rmcp SDK)");
+            let result = if cfg.mcp.backend == "sdk" {
+                log::info!("Using MCP SDK backend");
                 if port.is_some() {
                     crate::mcp_sdk::server::run_http(store, &cfg).await
                 } else {

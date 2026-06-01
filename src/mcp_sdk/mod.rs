@@ -1,6 +1,6 @@
-//! MCP v2 — rmcp SDK-based implementation.
-//! Activated via config: `[mcp] protocol_version = "2025"` (default: "2024" = legacy).
-//! Fallback to hand-rolled v1 (`src/mcp/`) if SDK fails or config says so.
+//! MCP SDK backend — rmcp-based implementation.
+//! Activated via config: `[mcp] backend = "sdk"` (default: "native").
+//! Falls back to native hand-rolled (`src/mcp/`) if SDK fails.
 
 pub mod server;
 pub mod tools;

@@ -15,6 +15,8 @@ pub async fn run_http(store: Store, config: &crate::config::Config) -> anyhow::R
     let state = Arc::new(store);
     let app = Router::new()
         .route("/", post(http_mcp_handler).get(http_health))
+        .route("/mcp", post(http_mcp_handler))
+        .route("/health", axum::routing::get(http_health))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
     axum::serve(listener, app).await?;
