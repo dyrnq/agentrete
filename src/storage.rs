@@ -229,6 +229,10 @@ impl Store {
         let _ = sqlx::query("ALTER TABLE kg_triples ADD COLUMN branch TEXT")
             .execute(&self.pool)
             .await;
+        // Incremental scan cache: file hash/size/mtime per project+branch
+        let _ = sqlx::query(
+            "CREATE TABLE IF NOT EXISTS kg_scan_cache (                file_path TEXT NOT NULL,                 project TEXT,                 branch TEXT,                 content_hash TEXT NOT NULL,                 file_size INTEGER NOT NULL,                 modified_at INTEGER NOT NULL,                 PRIMARY KEY (file_path, project, branch)            )"
+        ).execute(&self.pool).await;
         let _ =
             sqlx::query("CREATE INDEX IF NOT EXISTS idx_kg_triples_subject ON kg_triples(subject)")
                 .execute(&self.pool)
