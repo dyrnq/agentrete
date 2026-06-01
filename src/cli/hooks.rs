@@ -133,6 +133,7 @@ impl Unix {
     }
     fn all_scripts() -> Vec<(&'static str, &'static str)> {
         vec![
+            ("_json_extract.sh", Self::json_extract()),
             ("session-start.sh", Self::session_start()),
             ("prompt-submit.sh", Self::prompt_submit()),
             ("pre-tool-use.sh", Self::pre_tool_use()),
@@ -143,6 +144,9 @@ impl Unix {
             ("subagent-stop.sh", Self::subagent_stop()),
             ("stop.sh", Self::stop()),
         ]
+    }
+    fn json_extract() -> &'static str {
+        include_str!("../../hooks/unix/_json_extract.sh")
     }
     fn session_start() -> &'static str {
         include_str!("../../hooks/unix/session-start.sh")
@@ -186,6 +190,7 @@ impl Windows {
     }
     fn all_scripts() -> Vec<(&'static str, &'static str)> {
         vec![
+            ("_json_extract.ps1", Self::json_extract()),
             ("session-start.ps1", Self::session_start()),
             ("prompt-submit.ps1", Self::prompt_submit()),
             ("pre-tool-use.ps1", Self::pre_tool_use()),
@@ -196,6 +201,9 @@ impl Windows {
             ("subagent-stop.ps1", Self::subagent_stop()),
             ("stop.ps1", Self::stop()),
         ]
+    }
+    fn json_extract() -> &'static str {
+        include_str!("../../hooks/windows/_json_extract.ps1")
     }
     fn session_start() -> &'static str {
         include_str!("../../hooks/windows/session-start.ps1")

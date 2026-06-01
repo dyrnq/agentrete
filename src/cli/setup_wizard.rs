@@ -11,7 +11,7 @@ const DEFAULT_PORT: u16 = 9092;
 type ToolCheck = (&'static str, fn(&Path) -> bool, fn(&Path) -> bool, ToolKind);
 
 /// Run the setup wizard.
-pub fn run() -> Result<()> {
+pub fn run(force: bool) -> Result<()> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let bin = std::env::current_exe()
         .map(|p| p.to_string_lossy().into())
@@ -42,7 +42,7 @@ pub fn run() -> Result<()> {
     println!();
 
     for t in &tools {
-        if t.is_configured {
+        if t.is_configured && !force {
             continue;
         }
         configure_tool(t, &home, &bin)?;

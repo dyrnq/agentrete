@@ -81,7 +81,11 @@ enum Commands {
     /// Run diagnostics and health checks
     Doctor,
     /// Interactive setup: auto-detect AI tools and configure MCP + hooks
-    Setup,
+    Setup {
+        /// Force re-install hooks even if already configured
+        #[arg(long)]
+        force: bool,
+    },
 
     /// Install/Uninstall/Status as OS-native background service (systemd/launchd/autostart)
     Daemon {
@@ -267,8 +271,8 @@ fn main() -> anyhow::Result<()> {
     let cfg = crate::config::Config::load(mcp_port, cli.config.as_deref());
 
     // Commands that don't need the database
-    if let Commands::Setup = &cli.command {
-        return cli::setup_wizard::run();
+    if let Commands::Setup { force } = &cli.command {
+        return cli::setup_wizard::run(*force);
     }
 
     if let Commands::Daemon {
@@ -454,7 +458,7 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
             store_for_shutdown.shutdown().await;
             return Ok(());
         }
-        Commands::Daemon { .. } | Commands::Setup | Commands::InstallModel { .. } => {
+        Commands::Daemon { .. } | Commands::Setup { .. } | Commands::InstallModel { .. } => {
             unreachable!("handled before store open")
         }
     }
