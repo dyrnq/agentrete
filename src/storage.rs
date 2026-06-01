@@ -220,7 +220,9 @@ impl Store {
         // FTS auto-sync: soft-delete removes from FTS
         sqlx::query("CREATE TRIGGER IF NOT EXISTS memories_fts_au AFTER UPDATE OF deleted_at ON memories WHEN new.deleted_at IS NOT NULL AND old.deleted_at IS NULL BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); END;").execute(&self.pool).await?;
         sqlx::query("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, data TEXT, metadata TEXT, created_at TEXT DEFAULT (datetime('now')), ended_at TEXT)").execute(&self.pool).await?;
-        let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN ended_at TEXT").execute(&self.pool).await;
+        let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN ended_at TEXT")
+            .execute(&self.pool)
+            .await;
         sqlx::query("CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY, content TEXT, tool_name TEXT, session_id TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
         // Knowledge Graph triples (optional, only created if config enables it)
         let _ = sqlx::query("CREATE TABLE IF NOT EXISTS kg_triples (id TEXT PRIMARY KEY, subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL, confidence REAL DEFAULT 1.0, source_memory_id TEXT, project TEXT, branch TEXT, created_at TEXT NOT NULL)").execute(&self.pool).await;
@@ -277,7 +279,13 @@ impl Store {
     }
 
     /// Auto-extract SPO triples from memory content using simple rule-based patterns.
-    async fn auto_extract_triples(&self, memory_id: &str, content: &str, project: Option<&str>, branch: Option<&str>) {
+    async fn auto_extract_triples(
+        &self,
+        memory_id: &str,
+        content: &str,
+        project: Option<&str>,
+        branch: Option<&str>,
+    ) {
         let patterns: &[(&str, &str)] = &[
             (" is a ", "is_a"),
             (" are ", "is_a"),
@@ -298,15 +306,24 @@ impl Store {
                 if let Some(pos) = line.find(sep) {
                     let subject = line[..pos].trim();
                     let object = line[pos + sep.len()..].trim();
-                    if subject.is_empty() || object.is_empty() || subject.len() > 200 || object.len() > 200 {
+                    if subject.is_empty()
+                        || object.is_empty()
+                        || subject.len() > 200
+                        || object.len() > 200
+                    {
                         continue;
                     }
-                    let _ = self.add_triple(
-                        subject, pred, object, 0.6,
-                        Some(memory_id.to_string()),
-                        project.map(|s| s.to_string()),
-                        branch.map(|s| s.to_string()),
-                    ).await;
+                    let _ = self
+                        .add_triple(
+                            subject,
+                            pred,
+                            object,
+                            0.6,
+                            Some(memory_id.to_string()),
+                            project.map(|s| s.to_string()),
+                            branch.map(|s| s.to_string()),
+                        )
+                        .await;
                 }
             }
         }
@@ -578,7 +595,9 @@ impl Store {
         let mem_project = input.project.clone();
         let self_clone = self.clone();
         tokio::spawn(async move {
-            self_clone.auto_extract_triples(&mem_id, &mem_content, mem_project.as_deref(), None).await;
+            self_clone
+                .auto_extract_triples(&mem_id, &mem_content, mem_project.as_deref(), None)
+                .await;
         });
         Ok(id)
     }
@@ -1415,7 +1434,7 @@ fn sanitize_fts_query(query: &str) -> String {
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
 
-#[allow(dead_code)]
+    #[allow(dead_code)]
     fn fake_blob(dims: usize, val: f32) -> Vec<u8> {
         let v: Vec<f32> = vec![val; dims];
         v.iter().flat_map(|f| f32::to_le_bytes(*f)).collect()
