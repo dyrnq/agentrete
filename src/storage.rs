@@ -726,8 +726,30 @@ impl Store {
         .fetch_optional(&self.pool)
         .await?;
 
-        let needs_rebuild =
+        let dims_changed =
             self.vec_dims > 0 && stored_dims.is_some_and(|d| d as usize != self.vec_dims);
+
+        // Detect embedding model change (e.g. model2vec -> ollama) even if dims match.
+        // Different models produce semantically incompatible vectors.
+        let stored_model: Option<String> = sqlx::query_scalar(
+            "SELECT embedding_model FROM memories WHERE embedding IS NOT NULL LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten();
+
+        let needs_rebuild = dims_changed
+            || stored_model.as_ref().is_some_and(|m| {
+                !m.is_empty()
+                    && self.embedder.as_ref().is_some_and(|e| {
+                        let model_key = match **e {
+                            crate::embed::embeddings::Embedder::Model2Vec(_) => "model2vec",
+                            _ => "remote",
+                        };
+                        !m.starts_with(model_key)
+                    })
+            });
         if needs_rebuild {
             log::info!(
                 "init_vec: stored dims != {}, dropping vec0 + clearing embeddings",
