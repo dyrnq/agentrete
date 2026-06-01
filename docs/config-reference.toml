@@ -17,7 +17,7 @@ backend = "model2vec"   # "none" | "model2vec" | "remote"
 model = "BAAI/bge-small-zh-v1.5"    # source sentence-transformers model
 dims = 256                           # distilled dimension (256 = PCA from 512)
 # revision = "main"
-# model2vec_path = "/path/to/distilled/model"  # optional: pre-distilled model path
+# path = "/path/to/distilled/model"  # optional: pre-distilled model path
 # endpoint = "https://hf-mirror.com"
 
 
@@ -42,7 +42,7 @@ dims = 4096
 # [embedding.model2vec]
 # model = "BAAI/bge-small-zh-v1.5"
 # dims = 256
-# model2vec_path = "/tmp/m2v-bge-small-zh"
+# path = "/tmp/m2v-bge-small-zh"
 
 
 # OpenAI API:

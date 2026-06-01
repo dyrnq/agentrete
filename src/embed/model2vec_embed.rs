@@ -14,16 +14,26 @@ impl Model2VecEmbed {
         let default_model_path = dirs::home_dir()
             .unwrap_or_else(|| "/tmp".into())
             .join(".cache/model2vec/bge-small-256d");
-        let path = cfg
+        let raw = cfg
             .model2vec
-            .model2vec_path
+            .path
             .as_deref()
             .unwrap_or(default_model_path.to_str().unwrap_or("/tmp/bge-small-256d"));
+        // Expand tilde (~) to home directory
+        let path: String = if let Some(stripped) = raw.strip_prefix("~/") {
+            dirs::home_dir()
+                .unwrap_or_else(|| "/tmp".into())
+                .join(stripped)
+                .to_string_lossy()
+                .to_string()
+        } else {
+            raw.to_string()
+        };
 
         // Guard: warn if model directory is unusually large (>2GB)
-        let size_mb = if let Ok(meta) = std::fs::metadata(path) {
+        let size_mb = if let Ok(meta) = std::fs::metadata(&path) {
             let size_bytes: u64 = if meta.is_dir() {
-                walkdir::WalkDir::new(path)
+                walkdir::WalkDir::new(&path)
                     .into_iter()
                     .filter_map(|e| e.ok())
                     .filter(|e| e.file_type().is_file())
@@ -35,7 +45,7 @@ impl Model2VecEmbed {
             let mb = size_bytes / (1024 * 1024);
             if mb > 2048 {
                 log::warn!(
-                    "model2vec: model at {path} is {mb}MB — may cause OOM. Consider using a smaller model."
+                    "model2vec: model at {} is {mb}MB — may cause OOM. Consider using a smaller model.", path
                 );
             }
             mb
@@ -47,8 +57,8 @@ impl Model2VecEmbed {
         let load_start = std::time::Instant::now();
         log::info!("model2vec: loading {} (~{size_mb}MB) ...", path);
 
-        let model = StaticModel::from_pretrained(path, None, None, None)
-            .map_err(|e| anyhow::anyhow!("Failed to load model2vec model from {path}: {e}"))?;
+        let model = StaticModel::from_pretrained(&path, None, None, None)
+            .map_err(|e| anyhow::anyhow!("Failed to load model2vec model from {}: {e}", path))?;
 
         let elapsed = load_start.elapsed();
         log::info!(

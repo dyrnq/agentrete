@@ -287,7 +287,7 @@ backend = "model2vec"
 [embedding.model2vec]
 model = "BAAI/bge-small-zh-v1.5"
 dims = 256
-model2vec_path = "/path/to/distilled/model"
+path = "/path/to/distilled/model"
 ```
 
 **Distillation** (one-time):

@@ -58,7 +58,7 @@ backend = "model2vec"
 
 [embedding.model2vec]
 model = "BAAI/bge-m3"
-model2vec_path = "~/.cache/model2vec/bge-m3-512d"
+path = "~/.cache/model2vec/bge-m3-512d"
 dims = 512
 TOML
 ```

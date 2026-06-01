@@ -23,7 +23,7 @@ backend = "model2vec"
 [embedding.model2vec]
 model = "BAAI/bge-small-zh-v1.5"
 dims = 256
-model2vec_path = "~/.cache/model2vec/bge-small-256d"
+path = "~/.cache/model2vec/bge-small-256d"
 
 [knowledge_graph]
 enabled = true
@@ -85,7 +85,7 @@ Plus ~12 KG node/edge/symbol tests and remote Ollama tests.
 # Build binary first
 cargo build
 
-# Create config (adjust model2vec_path for your environment)
+# Create config (adjust path for your environment)
 cat > /tmp/test-m2v.toml << 'EOF'
 port = 9092
 db_dir = "/tmp/test-db"
@@ -96,7 +96,7 @@ backend = "model2vec"
 [embedding.model2vec]
 model = "BAAI/bge-small-zh-v1.5"
 dims = 256
-model2vec_path = "~/.cache/model2vec/bge-small-256d"
+path = "~/.cache/model2vec/bge-small-256d"
 
 [knowledge_graph]
 enabled = true
@@ -348,7 +348,7 @@ backend = "model2vec"
 [embedding.model2vec]
 model = "BAAI/bge-small-zh-v1.5"
 dims = 512
-model2vec_path = "~/.cache/model2vec/bge-small-512d"
+path = "~/.cache/model2vec/bge-small-512d"
 
 [knowledge_graph]
 enabled = true

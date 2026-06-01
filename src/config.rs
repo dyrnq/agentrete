@@ -80,8 +80,8 @@ pub struct Model2VecConfig {
     pub dims: u16,
     /// Path to pre-distilled model2vec directory (for backend = "model2vec").
     /// If empty, uses model field to find source sentence-transformers model.
-    #[serde(default)]
-    pub model2vec_path: Option<String>,
+    #[serde(default, alias = "model2vec_path")]
+    pub path: Option<String>,
     #[serde(default = "default_hf_endpoint")]
     pub endpoint: String,
 }
