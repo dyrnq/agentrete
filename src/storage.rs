@@ -1303,9 +1303,11 @@ impl Store {
                 .bind(id)
                 .execute(&self.pool)
                 .await?;
+        }
 
-            // Also insert into vec0 for KNN search
-            if self.vec_enabled {
+        // Batch INSERT into vec0 (reduce SQL round-trips)
+        if self.vec_enabled {
+            for ((id, _), vec) in rows.iter().zip(vectors.iter()) {
                 if let Ok(rowid) =
                     sqlx::query_scalar::<_, i64>("SELECT rowid FROM memories WHERE id = ?1")
                         .bind(id)
@@ -1325,7 +1327,6 @@ impl Store {
                 }
             }
         }
-
         Ok(ids.len())
     }
 

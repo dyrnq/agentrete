@@ -186,16 +186,6 @@ fn scan_directory_inner(
                 .output()
                 .with_context(|| format!("sg run failed for lang={sg_lang} kind={kind}"))?;
 
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if stderr.contains("unknown language") || stderr.contains("language") {
-                    log::warn!("sg: unknown language '{sg_lang}', skipping");
-                } else if !stderr.contains("no") && !stderr.is_empty() {
-                    log::warn!("sg: kind='{kind}' lang='{sg_lang}': {stderr}");
-                }
-                continue;
-            }
-
             let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.trim().is_empty() {
                 continue;
@@ -204,10 +194,18 @@ fn scan_directory_inner(
             let items: Vec<serde_json::Value> = match serde_json::from_str(&stdout) {
                 Ok(v) => v,
                 Err(e) => {
-                    log::debug!("sg: JSON parse error for {sg_lang}/{kind}: {e}");
+                    log::warn!("sg: JSON parse error for {sg_lang}/{kind}: {e}");
                     continue;
                 }
             };
+            // Guard: skip if too many items (e.g., method_declaration in large Java projects)
+            if items.len() > 50_000 {
+                log::warn!(
+                    "sg: kind='{kind}' lang='{sg_lang}' returned {} items, skipping",
+                    items.len()
+                );
+                continue;
+            }
 
             for item in &items {
                 let file = item["file"].as_str().unwrap_or("");

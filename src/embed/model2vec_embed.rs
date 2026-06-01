@@ -20,6 +20,27 @@ impl Model2VecEmbed {
             .as_deref()
             .unwrap_or(default_model_path.to_str().unwrap_or("/tmp/bge-small-256d"));
 
+        // Guard: warn if model directory is unusually large (>2GB)
+        if let Ok(meta) = std::fs::metadata(path) {
+            let size_bytes: u64 = if meta.is_dir() {
+                walkdir::WalkDir::new(path)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file())
+                    .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+                    .sum()
+            } else {
+                meta.len()
+            };
+            let size_mb = size_bytes / (1024 * 1024);
+            if size_mb > 2048 {
+                log::warn!(
+                    "model2vec: model at {path} is {size_mb}MB — may cause OOM. Consider using a smaller model."
+                );
+            }
+            log::info!("model2vec: model size ~{size_mb}MB");
+        }
+
         let model = StaticModel::from_pretrained(path, None, None, None)
             .map_err(|e| anyhow::anyhow!("Failed to load model2vec model from {path}: {e}"))?;
 
