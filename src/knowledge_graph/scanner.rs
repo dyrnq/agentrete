@@ -153,13 +153,208 @@ pub fn scan_files(files: &[std::path::PathBuf]) -> Result<(Vec<Symbol>, Vec<Rela
         .first()
         .map(|f| f.parent().unwrap_or(Path::new(".")))
         .unwrap_or(Path::new("."));
-    scan_directory_inner(root, Some(files))
+
+    // Group files by their language to avoid running sg for irrelevant languages
+    let mut lang_files: std::collections::HashMap<&str, Vec<std::path::PathBuf>> =
+        std::collections::HashMap::new();
+    for f in files {
+        if let Some(ext) = f.extension().and_then(|e| e.to_str()) {
+            if let Some(pos) = EXT_TO_LANG.iter().position(|(e, _)| *e == ext) {
+                let lang = EXT_TO_LANG[pos].1;
+                lang_files.entry(lang).or_default().push(f.clone());
+            }
+        }
+    }
+
+    // If no files matched (e.g. all are unknown extensions), fall back to full scan
+    if lang_files.is_empty() {
+        return scan_directory_inner(root, Some(files));
+    }
+
+    let mut all_symbols = Vec::new();
+    let mut all_relations = Vec::new();
+
+    for (lang, lang_file_list) in &lang_files {
+        if let Some((_, kinds, import_kinds)) = LANGUAGES.iter().find(|(l, _, _)| *l == *lang) {
+            let (syms, rels) =
+                scan_language(root, lang, kinds, import_kinds, Some(lang_file_list))?;
+            all_symbols.extend(syms);
+            all_relations.extend(rels);
+        }
+    }
+
+    Ok((all_symbols, all_relations))
 }
 
 /// Scan a directory using ast-grep CLI.
 #[allow(dead_code)]
 pub fn scan_directory(root: &Path) -> Result<(Vec<Symbol>, Vec<Relation>)> {
     scan_directory_inner(root, None)
+}
+
+/// Map file extension to sg language name for targeted scanning.
+const EXT_TO_LANG: &[(&str, &str)] = &[
+    ("rs", "rust"),
+    ("py", "python"),
+    ("ts", "typescript"),
+    ("tsx", "typescript"),
+    ("js", "javascript"),
+    ("jsx", "javascript"),
+    ("java", "java"),
+    ("kt", "kotlin"),
+    ("kts", "kotlin"),
+    ("go", "go"),
+    ("rb", "ruby"),
+    ("php", "php"),
+    ("swift", "swift"),
+    ("c", "c"),
+    ("h", "c"),
+    ("cpp", "cpp"),
+    ("cc", "cpp"),
+    ("cxx", "cpp"),
+    ("hpp", "cpp"),
+    ("cs", "c-sharp"),
+    ("scala", "scala"),
+    ("sc", "scala"),
+    ("m", "objc"),
+    ("mm", "objc"),
+    ("sh", "bash"),
+    ("bash", "bash"),
+];
+
+fn scan_language(
+    root: &Path,
+    sg_lang: &str,
+    kinds: &[&str],
+    import_kinds: &[&str],
+    file_filter: Option<&[std::path::PathBuf]>,
+) -> Result<(Vec<Symbol>, Vec<Relation>)> {
+    let mut all_symbols = Vec::new();
+    let mut all_relations = Vec::new();
+
+    // Extract symbols for each kind
+    for kind in kinds {
+        let mut cmd = std::process::Command::new("sg");
+        cmd.args(["run", "--kind", kind, "--lang", sg_lang, "--json"]);
+        if let Some(files) = file_filter {
+            for f in files.iter() {
+                cmd.arg(f.as_os_str());
+            }
+        } else {
+            cmd.arg(root.as_os_str());
+        }
+
+        let output = cmd.output();
+        let output = match output {
+            Ok(o) if o.status.success() => o,
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                if stderr.contains("unknown language") || stderr.contains("language") {
+                    log::warn!("sg: unknown language '{sg_lang}', skipping");
+                    continue;
+                }
+                log::warn!(
+                    "sg: kind='{kind}' lang='{sg_lang}' exit={}: {stderr}",
+                    o.status
+                );
+                continue;
+            }
+            Err(e) => {
+                log::warn!("sg: failed to spawn for lang={sg_lang} kind={kind}: {e}");
+                continue;
+            }
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.trim().is_empty() {
+            continue;
+        }
+
+        let items: Vec<serde_json::Value> = match serde_json::from_str(&stdout) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("sg: JSON parse error for {sg_lang}/{kind}: {e}");
+                continue;
+            }
+        };
+        // Guard: skip if too many items (e.g., method_declaration in large Java projects)
+        if items.len() > 50_000 {
+            log::warn!(
+                "sg: kind='{kind}' lang='{sg_lang}' returned {} items, skipping",
+                items.len()
+            );
+            continue;
+        }
+
+        for item in &items {
+            let name = item["text"].as_str().unwrap_or("");
+            let file = item["file"].as_str().unwrap_or("");
+            let line = item["range"]["start"]["line"].as_u64().unwrap_or(0) as usize;
+            if !name.is_empty() {
+                let clean_name = extract_name(name);
+                if !clean_name.is_empty() {
+                    all_symbols.push(Symbol {
+                        name: clean_name,
+                        kind: kind_to_symbol_kind(kind),
+                        file: file.to_string(),
+                        line,
+                    });
+                }
+            }
+        }
+    }
+
+    // Extract imports/relations
+    for kind in import_kinds {
+        let mut cmd = std::process::Command::new("sg");
+        cmd.args(["run", "--kind", kind, "--lang", sg_lang, "--json"]);
+        if let Some(files) = file_filter {
+            for f in files.iter() {
+                cmd.arg(f.as_os_str());
+            }
+        } else {
+            cmd.arg(root.as_os_str());
+        }
+
+        let output = cmd.output();
+        let output = match output {
+            Ok(o) if o.status.success() => o,
+            _ => continue,
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.trim().is_empty() {
+            continue;
+        }
+
+        let items: Vec<serde_json::Value> = match serde_json::from_str(&stdout) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if items.len() > 50_000 {
+            continue;
+        }
+
+        for item in &items {
+            let text = item["text"].as_str().unwrap_or("");
+            let target = extract_import_target(text, sg_lang);
+            let file = item["file"].as_str().unwrap_or("");
+            if !target.is_empty() {
+                // Link file to import target
+                let stem = std::path::Path::new(file)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                all_relations.push(Relation {
+                    source: stem.to_string(),
+                    target,
+                    relation: "imports".to_string(),
+                });
+            }
+        }
+    }
+
+    Ok((all_symbols, all_relations))
 }
 
 fn scan_directory_inner(
