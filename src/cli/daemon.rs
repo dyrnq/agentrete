@@ -91,6 +91,20 @@ WantedBy=default.target
 #[cfg(target_os = "macos")]
 fn install(port: u16, binary: &str) -> Result<()> {
     let home = std::env::var("HOME")?;
+
+    // Copy binary to stable location (survives npx cache cleanup)
+    let bin_dir = format!("{}/.local/bin", home);
+    std::fs::create_dir_all(&bin_dir)?;
+    let stable_bin = format!("{}/agentrete", bin_dir);
+    std::fs::copy(binary, &stable_bin)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&stable_bin)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&stable_bin, perms)?;
+    }
+
     let agent_dir = format!("{}/Library/LaunchAgents", home);
     std::fs::create_dir_all(&agent_dir)?;
 
@@ -103,7 +117,7 @@ fn install(port: u16, binary: &str) -> Result<()> {
     <string>io.agentrete.server</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{binary}</string>
+        <string>{stable_bin}</string>
         <string>mcp</string>
         <string>--port</string>
         <string>{port}</string>
@@ -119,7 +133,7 @@ fn install(port: u16, binary: &str) -> Result<()> {
 </dict>
 </plist>
 "#,
-        binary = binary,
+        stable_bin = stable_bin,
         port = port
     );
 
@@ -139,10 +153,17 @@ fn install(port: u16, binary: &str) -> Result<()> {
 
 #[cfg(target_os = "windows")]
 fn install(port: u16, binary: &str) -> Result<()> {
+    // Copy binary to stable location (survives npx cache cleanup)
+    let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_string());
+    let bin_dir = format!("{}\\agentrete", appdata);
+    std::fs::create_dir_all(&bin_dir)?;
+    let stable_bin = format!("{}\\agentrete.exe", bin_dir);
+    std::fs::copy(binary, &stable_bin)?;
+
     // Windows: registry Run key for auto-start on login
     let reg_cmd = format!(
         r#"powershell -Command "New-ItemProperty -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Name Agentrete -Value '{} mcp --port {}' -PropertyType String -Force""#,
-        binary.replace('\\', "\\\\"),
+        stable_bin.replace('\\', "\\\\"),
         port
     );
 
@@ -197,6 +218,8 @@ fn uninstall() -> Result<()> {
         .status()
         .ok();
     let _ = std::fs::remove_file(&plist_path);
+    // Clean up stable binary
+    let _ = std::fs::remove_file(format!("{}/.local/bin/agentrete", home));
     println!("Agentreate service uninstalled.");
     Ok(())
 }
