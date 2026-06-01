@@ -64,6 +64,41 @@ jobs:
         uses: ilammy/setup-nasm@v1
       - name: Build (debug)
         run: cargo build --target ${{ matrix.target }}
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p /tmp/smoke
+          cat > /tmp/smoke/config.toml << 'TOML'
+          port = 19099
+          db_dir = "/tmp/smoke"
+
+          [embedding]
+          backend = "none"
+
+          [knowledge_graph]
+          enabled = false
+          TOML
+
+          ./target/${{ matrix.target }}/debug/agentrete -c /tmp/smoke/config.toml mcp --port 19099 &
+          PID=$!
+
+          for i in $(seq 1 15); do
+            if curl -s http://127.0.0.1:19099/ >/dev/null 2>&1; then
+              echo "Smoke ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+          curl -s http://127.0.0.1:19099/ | grep -q '"status":"ok"' || { echo "Health FAIL"; kill $PID; exit 1; }
+          echo "Health OK"
+
+          SAVE=$(curl -s -X POST http://127.0.0.1:19099/ -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"memory_save","arguments":{"content":"smoke","type":"test"}}}')
+          echo "$SAVE" | grep -q '"Saved:"' || { echo "Save FAIL"; kill $PID; exit 1; }
+          echo "Save OK"
+
+          kill $PID
+          echo "Cross-platform smoke PASSED (${{ matrix.target }})"
 
   test:
     needs: [cross-check]
