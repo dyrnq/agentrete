@@ -219,16 +219,31 @@ impl ServerHandler for AgentreteServer {
             .with_server_info(Implementation::new("agentrete", version))
             .with_instructions(include_str!("../mcp/protocol.rs"))
     }
+
+    async fn initialize(
+        &self,
+        request: rmcp::model::InitializeRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<rmcp::model::InitializeResult, rmcp::ErrorData> {
+        log::info!(
+            "MCP initialize v{} from {}",
+            request.protocol_version,
+            request.client_info.name
+        );
+        Ok(rmcp::model::InitializeResult::new(
+            rmcp::model::ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+        )
+        .with_server_info(rmcp::model::Implementation::new(
+            "agentrete",
+            env!("CARGO_PKG_VERSION"),
+        ))
+        .with_instructions(include_str!("../mcp/protocol.rs")))
+    }
 }
 
 // ── Transport runners ───────────────────────────────────────────────────────
-
-pub async fn run(store: Store) -> anyhow::Result<()> {
-    log::info!("agentrete MCP (rmcp SDK, stdio)");
-    let svc = serve_server(AgentreteServer::new(store), rmcp::transport::io::stdio()).await?;
-    svc.waiting().await?;
-    Ok(())
-}
 
 pub async fn run_http(store: Store, config: &crate::config::Config) -> anyhow::Result<()> {
     use rmcp::transport::streamable_http_server::{
@@ -244,11 +259,69 @@ pub async fn run_http(store: Store, config: &crate::config::Config) -> anyhow::R
         .with_stateful_mode(false)
         .with_json_response(true);
 
-    let service =
-        StreamableHttpService::new(move || Ok(state.clone()), session_manager, svc_config);
+    let svc = StreamableHttpService::new(move || Ok(state.clone()), session_manager, svc_config);
+    let svc = AcceptFixService::new(svc);
 
-    let app = axum::Router::new().nest_service("/mcp", service);
+    // Serve at root (/) to match v1 MCP endpoint path used by Codex config.
+    // Can't use nest_service("/") — axum panics. Use route_service("/").
+    let app = axum::Router::new().route_service("/", svc);
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await?;
     axum::serve(listener, app).await?;
+    Ok(())
+}
+
+#[derive(Clone)]
+struct AcceptFixService<S> {
+    inner: S,
+}
+
+impl<S> AcceptFixService<S> {
+    fn new(inner: S) -> Self {
+        Self { inner }
+    }
+}
+
+impl<S, B, ResBody> tower::Service<axum::http::Request<B>> for AcceptFixService<S>
+where
+    S: tower::Service<axum::http::Request<B>, Response = axum::http::Response<ResBody>>,
+    S::Future: Send + 'static,
+    S::Error: std::error::Error + Send + Sync,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = futures::future::BoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: axum::http::Request<B>) -> Self::Future {
+        let accept = req
+            .headers()
+            .get(http::header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        if !accept.contains("text/event-stream") {
+            let new_val =
+                if accept.is_empty() || accept == "*/*" || accept.contains("application/json") {
+                    http::HeaderValue::from_static("application/json, text/event-stream")
+                } else {
+                    http::HeaderValue::from_static("text/event-stream")
+                };
+            req.headers_mut().insert(http::header::ACCEPT, new_val);
+        }
+        let fut = self.inner.call(req);
+        Box::pin(fut)
+    }
+}
+
+pub async fn run(store: Store) -> anyhow::Result<()> {
+    log::info!("agentrete MCP (rmcp SDK, stdio)");
+    let svc = serve_server(AgentreteServer::new(store), rmcp::transport::io::stdio()).await?;
+    svc.waiting().await?;
     Ok(())
 }
