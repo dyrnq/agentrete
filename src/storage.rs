@@ -356,10 +356,9 @@ impl Store {
         let mut changed_files: Vec<std::path::PathBuf> = Vec::new();
         let mut cached_count = 0u64;
         let source_exts = &[
-            "rs", "py", "js", "ts", "tsx", "jsx", "go", "java",
-            "c", "cpp", "h", "hpp", "cs", "rb", "php", "swift",
-            "kt", "scala", "css", "html", "json", "toml", "yaml", "yml",
-            "md", "sql", "sh", "bash", "proto",
+            "rs", "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "cpp", "h", "hpp", "cs", "rb",
+            "php", "swift", "kt", "scala", "css", "html", "json", "toml", "yaml", "yml", "md",
+            "sql", "sh", "bash", "proto",
         ];
 
         for entry in walkdir::WalkDir::new(root)
@@ -385,7 +384,9 @@ impl Store {
                 continue;
             }
 
-            let Ok(content_bytes) = std::fs::read(path) else { continue };
+            let Ok(content_bytes) = std::fs::read(path) else {
+                continue;
+            };
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             content_bytes.hash(&mut hasher);
             let hash_str = hasher.finish().to_string();
@@ -414,9 +415,9 @@ impl Store {
             .ok()
             .flatten();
 
-            let hit = cached.as_ref().is_some_and(|(ch, cs, cm)| {
-                *ch == hash_str && *cs == file_size && *cm == mtime
-            });
+            let hit = cached
+                .as_ref()
+                .is_some_and(|(ch, cs, cm)| *ch == hash_str && *cs == file_size && *cm == mtime);
             if hit {
                 cached_count += 1;
                 continue;
@@ -439,7 +440,10 @@ impl Store {
 
         log::info!(
             "kg_scan: {} changed, {} cached (project={:?}, branch={:?})",
-            changed_files.len(), cached_count, project, branch
+            changed_files.len(),
+            cached_count,
+            project,
+            branch
         );
 
         // ── Scan only changed files ─────────────────────────────────────────
