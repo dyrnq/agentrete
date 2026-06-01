@@ -66,6 +66,7 @@ jobs:
         run: cargo build --target ${{ matrix.target }}
       - name: Smoke test
         if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
         run: |
           BIN="./target/${{ matrix.target }}/debug/agentrete"
           case "${{ matrix.target }}" in *windows*) BIN="${BIN}.exe" ;; esac
