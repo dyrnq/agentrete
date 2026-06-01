@@ -3,3 +3,4 @@
 //! Fallback to hand-rolled v1 (`src/mcp/`) if SDK fails or config says so.
 
 pub mod server;
+pub mod tools;
