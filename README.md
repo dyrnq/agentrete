@@ -8,25 +8,51 @@ Local-first persistent memory engine for AI coding agents.
 
 ## Quick Start
 
+### npm (recommended)
+
 ```bash
-# 1. Build
+# 1. Install hooks + configure AI tools
+npx agentrete setup
+
+# 2. Start background service
+npx agentrete daemon install
+
+# 3. Verify
+npx agentrete stats
+```
+
+**Setup** auto-detects your AI tools (Codex, Claude, Cursor, etc.), writes MCP config, and installs hooks.
+
+**Daemon** registers a systemd/launchd service that auto-starts on boot.
+
+**Stats** should show `Memories: 0` — ready. Restart your AI tool and start working.
+
+### From source (developers)
+
+```bash
 git clone git@github.com:dyrnq/agentrete.git
 cd agentrete
 cargo build
-
-# 2. Start MCP server
 ./target/debug/agentrete daemon install --port 9092
-# or: ./target/debug/agentrete mcp --port 9092 &
-
-# 3. Auto-configure AI tools (Codex, Claude, Cursor, etc.)
 ./target/debug/agentrete setup
 ```
 
-Or via npm:
+### After install
 
-```bash
-npx agentrete setup
-```
+1. Restart your AI tool
+2. Hooks auto-search relevant memories on session start
+3. Use `memory_save` to persist decisions, patterns, bugs
+4. Run `memory_stats` to see what's stored
+
+> **Want semantic search?** Add a model to `~/.agentrete/config.toml`:
+> ```toml
+> [embedding]
+> backend = "model2vec"
+> [embedding.model2vec]
+> model = "minilm-256d"
+> dims = 256
+> ```
+> Without this, agentrete uses fast BM25 text search — no model download needed.
 
 ## CLI Commands
 

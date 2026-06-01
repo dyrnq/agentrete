@@ -11,6 +11,21 @@ const DEFAULT_PORT: u16 = 9092;
 type ToolCheck = (&'static str, fn(&Path) -> bool, fn(&Path) -> bool, ToolKind);
 
 /// Run the setup wizard.
+/// Check if hooks need updating: stored version != current version.
+fn hooks_version_changed(home: &Path) -> bool {
+    let path = home.join(".agentrete/.hooks_version");
+    let stored = std::fs::read_to_string(&path).unwrap_or_default();
+    let current = env!("CARGO_PKG_VERSION");
+    stored.trim() != current
+}
+
+/// Write current version to ~/.agentrete/.hooks_version
+fn write_hooks_version(home: &Path) {
+    let dir = home.join(".agentrete");
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(".hooks_version"), env!("CARGO_PKG_VERSION"));
+}
+
 pub fn run(force: bool) -> Result<()> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let bin = std::env::current_exe()
@@ -30,10 +45,17 @@ pub fn run(force: bool) -> Result<()> {
         return Ok(());
     }
 
+    // Check if hooks need update (version change since last install)
+    let hooks_need_update = force || hooks_version_changed(&home);
+
     let mut configured = 0u32;
     for t in &tools {
         let status = if t.is_configured {
-            "✓ (configured)"
+            if hooks_need_update {
+                "✓ (update available)"
+            } else {
+                "✓ (configured)"
+            }
         } else {
             "○"
         };
@@ -42,7 +64,7 @@ pub fn run(force: bool) -> Result<()> {
     println!();
 
     for t in &tools {
-        if t.is_configured && !force {
+        if t.is_configured && !hooks_need_update {
             continue;
         }
         configure_tool(t, &home, &bin)?;
@@ -51,6 +73,11 @@ pub fn run(force: bool) -> Result<()> {
             eprintln!("  ⚠ hook install failed for {}: {}", t.name, e);
         }
         configured += 1;
+    }
+
+    // Persist current version after successful install
+    if configured > 0 || hooks_need_update {
+        write_hooks_version(&home);
     }
 
     if configured > 0 {
