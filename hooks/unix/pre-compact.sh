@@ -1,4 +1,5 @@
 #!/bin/sh
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"; . "$HOOK_DIR/_json_extract.sh"
 # agentrete PreCompact hook — emergency save before context compression.
 # Always fires (no interval). After compression, the AI may lose access
 # to earlier details — save everything important NOW.
