@@ -1,6 +1,6 @@
 # Knowledge Graph 模块
 
-> **状态**: 已实现，v0.2
+> **状态**: 已实现，v0.1
 > **入口**: `docs/kg-design.md`
 
 ## 架构

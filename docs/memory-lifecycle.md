@@ -143,7 +143,8 @@ This ensures a clean transition with no stale vectors.
 | Database | SQLite (WAL mode, sqlx) |
 | Full-text search | FTS5 (BM25) |
 | Vector search | deferred (embed worker + BLOB storage) |
-| Embedding model | bge-small-zh-v1.5 (local, 512d, 93MB) |
+| Sessions & Observations | Auto-recorded on MCP init / memory_save / memory_search |
+| Embedding model | minilm-256d (local, 256d, 131MB) |
 | Embedding remote | qwen3-embedding (Ollama, 4096d) |
 | HTTP framework | axum |
 | Config | config-rs (TOML/YAML/JSON + env) |
