@@ -8,6 +8,7 @@ mod config;
 mod embed;
 mod knowledge_graph;
 mod mcp;
+mod mcp_sdk;
 mod storage;
 mod types;
 
@@ -440,13 +441,22 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
                 None
             };
 
-            let result = match port {
-                Some(_) => crate::mcp::run_http(store, &cfg).await,
-                None => {
-                    log::info!(
-                        "agentrete: stdio mode (embed worker disabled, use HTTP for embeddings)"
-                    );
-                    crate::mcp::run_stdio(store).await
+            let result = if cfg.mcp.version == "2025" {
+                log::info!("Using MCP v2 (rmcp SDK)");
+                if port.is_some() {
+                    crate::mcp_sdk::server::run_http(store, &cfg).await
+                } else {
+                    crate::mcp_sdk::server::run(store).await
+                }
+            } else {
+                match port {
+                    Some(_) => crate::mcp::run_http(store, &cfg).await,
+                    None => {
+                        log::info!(
+                            "agentrete: stdio mode (embed worker disabled, use HTTP for embeddings)"
+                        );
+                        crate::mcp::run_stdio(store).await
+                    }
                 }
             };
 

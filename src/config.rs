@@ -86,6 +86,19 @@ pub struct Model2VecConfig {
     pub endpoint: String,
 }
 
+/// MCP server configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct McpConfig {
+    /// MCP implementation: "2024" (legacy hand-rolled) or "2025" (rmcp SDK).
+    /// Default: "2024" for backward compatibility.
+    #[serde(default = "default_mcp_version")]
+    pub version: String,
+}
+
+fn default_mcp_version() -> String {
+    "2024".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 /// Knowledge graph configuration.
 pub struct KnowledgeGraphConfig {
@@ -184,6 +197,12 @@ pub struct Config {
     /// Search tuning.
     #[serde(default)]
     pub search: SearchConfig,
+
+    /// MCP implementation version.
+    #[serde(default)]
+    pub mcp: McpConfig,
+
+    /// Knowledge graph configuration.
     #[serde(default)]
     pub knowledge_graph: KnowledgeGraphConfig,
 }
@@ -197,6 +216,7 @@ impl Default for Config {
         Self {
             port: DEFAULT_PORT,
             embedding: EmbeddingConfig::default(),
+            mcp: McpConfig::default(),
             db_dir: None,
             cache_dir: None,
             search: SearchConfig::default(),
