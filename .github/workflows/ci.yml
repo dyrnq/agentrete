@@ -99,7 +99,7 @@ jobs:
           enabled = false
           TOML
 
-          cargo run -- -c /tmp/agentrete-test/config.toml mcp --port 19092 &
+          ./target/debug/agentrete -c /tmp/agentrete-test/config.toml mcp --port 19092 &
           PID=$!
 
           for i in $(seq 1 15); do
