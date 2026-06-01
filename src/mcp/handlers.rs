@@ -49,6 +49,9 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
 
     match method {
         "initialize" => {
+            // Auto-create session on initialize
+            let sess_id = store.start_session(None, None).await.unwrap_or_default();
+            *store.current_session.lock().unwrap() = Some(sess_id.clone());
             // params is request["params"], so protocolVersion is directly under it
             let requested_version = params
                 .get("protocolVersion")
@@ -83,10 +86,11 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                     // Log observation (non-blocking)
                     let store_obs = store.clone();
                     let content_obs = c.to_string();
-                    let t_obs = a["type"].as_str().unwrap_or("").to_string();
+                    let _t_obs = a["type"].as_str().unwrap_or("").to_string();
+                    let sess_id = store.current_session.lock().unwrap().clone();
                     tokio::spawn(async move {
                         let _ = store_obs
-                            .log_observation("memory_save", &content_obs, None)
+                            .log_observation("memory_save", &content_obs, sess_id.as_deref())
                             .await;
                     });
                     if dry_run {
@@ -125,9 +129,10 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                     let q = a["query"].as_str().unwrap_or("");
                     let store_obs = store.clone();
                     let query_obs = q.to_string();
+                    let sess_id = store.current_session.lock().unwrap().clone();
                     tokio::spawn(async move {
                         let _ = store_obs
-                            .log_observation("memory_search", &query_obs, None)
+                            .log_observation("memory_search", &query_obs, sess_id.as_deref())
                             .await;
                     });
                     let l = a["limit"].as_u64().unwrap_or(10) as u8;

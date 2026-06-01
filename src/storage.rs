@@ -44,6 +44,8 @@ pub struct Store {
     pub(crate) watch_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub(crate) scan_result: Arc<std::sync::Mutex<Option<String>>>,
     pub(crate) tasks: Arc<crate::mcp::tasks::TaskManager>,
+    #[allow(dead_code)]
+    pub(crate) current_session: Arc<std::sync::Mutex<Option<String>>>,
     vec_enabled: bool,
     vec_dims: usize,
     rrf_k: f64,
@@ -174,6 +176,7 @@ impl Store {
             watch_handle: Arc::new(std::sync::Mutex::new(None)),
             scan_result: Arc::new(std::sync::Mutex::new(None)),
             tasks: crate::mcp::tasks::TaskManager::new(),
+            current_session: Arc::new(std::sync::Mutex::new(None)),
             vec_enabled,
             vec_dims: dims,
             rrf_k: cfg.search.rrf_k,
@@ -216,7 +219,8 @@ impl Store {
         sqlx::query("CREATE TRIGGER IF NOT EXISTS memories_fts_ai AFTER INSERT ON memories WHEN new.deleted_at IS NULL BEGIN INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content); END;").execute(&self.pool).await?;
         // FTS auto-sync: soft-delete removes from FTS
         sqlx::query("CREATE TRIGGER IF NOT EXISTS memories_fts_au AFTER UPDATE OF deleted_at ON memories WHEN new.deleted_at IS NOT NULL AND old.deleted_at IS NULL BEGIN INSERT INTO memories_fts(memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content); END;").execute(&self.pool).await?;
-        sqlx::query("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, data TEXT, metadata TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, data TEXT, metadata TEXT, created_at TEXT DEFAULT (datetime('now')), ended_at TEXT)").execute(&self.pool).await?;
+        let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN ended_at TEXT").execute(&self.pool).await;
         sqlx::query("CREATE TABLE IF NOT EXISTS observations (id TEXT PRIMARY KEY, content TEXT, tool_name TEXT, session_id TEXT, created_at TEXT DEFAULT (datetime('now')))").execute(&self.pool).await?;
         // Knowledge Graph triples (optional, only created if config enables it)
         let _ = sqlx::query("CREATE TABLE IF NOT EXISTS kg_triples (id TEXT PRIMARY KEY, subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL, confidence REAL DEFAULT 1.0, source_memory_id TEXT, project TEXT, branch TEXT, created_at TEXT NOT NULL)").execute(&self.pool).await;
@@ -251,6 +255,7 @@ impl Store {
 
     /// Add a SPO triple to the knowledge graph.
     #[allow(dead_code)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_triple(
         &self,
         subject: &str,
@@ -269,6 +274,42 @@ impl Store {
         self.graph
             .add_triple_local(subject, predicate, object, confidence, source_memory_id);
         Ok(id)
+    }
+
+    /// Auto-extract SPO triples from memory content using simple rule-based patterns.
+    async fn auto_extract_triples(&self, memory_id: &str, content: &str, project: Option<&str>, branch: Option<&str>) {
+        let patterns: &[(&str, &str)] = &[
+            (" is a ", "is_a"),
+            (" are ", "is_a"),
+            (" uses ", "uses"),
+            (" depends on ", "depends_on"),
+            (" requires ", "requires"),
+            (" implements ", "implements"),
+            (" calls ", "calls"),
+            (" fixed by ", "fixed_by"),
+            (" caused by ", "caused_by"),
+        ];
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
+                continue;
+            }
+            for (sep, pred) in patterns {
+                if let Some(pos) = line.find(sep) {
+                    let subject = line[..pos].trim();
+                    let object = line[pos + sep.len()..].trim();
+                    if subject.is_empty() || object.is_empty() || subject.len() > 200 || object.len() > 200 {
+                        continue;
+                    }
+                    let _ = self.add_triple(
+                        subject, pred, object, 0.6,
+                        Some(memory_id.to_string()),
+                        project.map(|s| s.to_string()),
+                        branch.map(|s| s.to_string()),
+                    ).await;
+                }
+            }
+        }
     }
 
     /// Clear all triples for a project+branch before re-scan.
@@ -463,13 +504,13 @@ impl Store {
             if line.starts_with("COMMIT ") {
                 if !commit_hash.is_empty() && in_files {
                     let cid = format!("commit:{}", &commit_hash[..8]);
-                    let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
+                    let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(project).bind(branch).bind(&now).execute(&self.pool).await;
                     if !commit_msg.is_empty() {
                         let ms: String = commit_msg.chars().take(80).collect();
-                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
+                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(project).bind(branch).bind(&now).execute(&self.pool).await;
                     }
                     if !commit_author.is_empty() {
-                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
+                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(project).bind(branch).bind(&now).execute(&self.pool).await;
                     }
                 }
                 let parts: Vec<&str> = line.split(' ').collect();
@@ -489,18 +530,18 @@ impl Store {
                     .file_stem()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
-                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6,?7)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(format!("file:{}", stem)).bind("modified_in").bind(&cid).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6,?7)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(format!("file:{}", stem)).bind("modified_in").bind(&cid).bind(project).bind(branch).bind(&now).execute(&self.pool).await;
             }
         }
         if !commit_hash.is_empty() && in_files {
             let cid = format!("commit:{}", &commit_hash[..8]);
-            let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
+            let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(project).bind(branch).bind(&now).execute(&self.pool).await;
             if !commit_msg.is_empty() {
                 let ms: String = commit_msg.chars().take(80).collect();
-                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(project).bind(branch).bind(&now).execute(&self.pool).await;
             }
             if !commit_author.is_empty() {
-                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(project).bind(branch).bind(&now).execute(&self.pool).await;
             }
         }
         Ok(())
@@ -531,6 +572,14 @@ impl Store {
             .await?;
             return Ok(existing);
         }
+        // Auto-extract KG triples from saved memory content
+        let mem_id = id.clone();
+        let mem_content = input.content.clone();
+        let mem_project = input.project.clone();
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            self_clone.auto_extract_triples(&mem_id, &mem_content, mem_project.as_deref(), None).await;
+        });
         Ok(id)
     }
 
@@ -1150,6 +1199,7 @@ impl Store {
     }
 
     /// Start a new session. Returns session ID.
+    #[allow(dead_code)]
     pub async fn start_session(
         &self,
         data: Option<&str>,
@@ -1167,6 +1217,19 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(id)
+    }
+
+    /// Close a session by setting its ended_at timestamp.
+    #[allow(dead_code)]
+    pub async fn close_session(&self, session_id: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("UPDATE sessions SET ended_at = ?1 WHERE id = ?2")
+            .bind(&now)
+            .bind(session_id)
+            .execute(&self.pool)
+            .await?;
+        log::info!("session {} closed", session_id);
+        Ok(())
     }
 
     /// Log a tool observation.
@@ -1350,10 +1413,9 @@ fn sanitize_fts_query(query: &str) -> String {
     s
 }
 #[allow(clippy::field_reassign_with_default)]
-
 mod tests {
-    use tempfile::tempdir;
 
+#[allow(dead_code)]
     fn fake_blob(dims: usize, val: f32) -> Vec<u8> {
         let v: Vec<f32> = vec![val; dims];
         v.iter().flat_map(|f| f32::to_le_bytes(*f)).collect()
@@ -1361,6 +1423,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_reembed_flow() {
+        use tempfile::tempdir;
         let tmp = tempdir().unwrap();
         let db_path = tmp.path().join("memory.db");
 
@@ -1456,8 +1519,8 @@ mod tests {
         let git_dir = tmp.path().join("test_repo");
         std::fs::create_dir(&git_dir).unwrap();
 
-        /// which fails when the column doesn't exist. We replace hyphens and
-        /// other FTS5 special chars that could be misinterpreted.
+        // which fails when the column doesn't exist. We replace hyphens and
+        // other FTS5 special chars that could be misinterpreted.
         // Initialize git repo
         Command::new("git")
             .args(["init"])

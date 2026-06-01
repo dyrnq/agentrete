@@ -4,4 +4,5 @@ AGENTS.md
 codex.sh
 npm/bin/
 node_modules/
+graphify-out/
 package-lock.json

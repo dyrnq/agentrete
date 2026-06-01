@@ -218,6 +218,7 @@ fn run_install_model(model_id: &str, endpoint: &str, revision: &str) -> anyhow::
     Ok(())
 }
 
+#[allow(dead_code)]
 const SEED_RULES: &[(&str, &str, &str)] = &[
     ("Think Before Coding: State assumptions, surface tradeoffs, don't hide confusion", "rule", "karpathy,coding"),
     ("Simplicity First: Minimum code, no speculative features, no unrequested abstractions", "rule", "karpathy,coding"),
@@ -460,6 +461,7 @@ async fn async_main(cli: Cli, cfg: crate::config::Config) -> anyhow::Result<()> 
     Ok(())
 }
 
+#[allow(dead_code)]
 fn ask_confirmation(prompt: &str) -> bool {
     use std::io::Write;
     print!("{} [y/N] ", prompt);

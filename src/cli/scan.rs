@@ -17,7 +17,7 @@ pub(crate) async fn cmd_doctor(store: &Store) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_init(store: &Store) -> Result<()> {
+pub(crate) async fn cmd_init(_store: &Store) -> Result<()> {
     println!("Database initialized.");
     Ok(())
 }
