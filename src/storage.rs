@@ -1,7 +1,5 @@
 //! SQLite storage via sqlx (async, Send+Sync, connection pool).
 
-#![allow(dead_code)]
-
 use anyhow::Result;
 use chrono::Utc;
 
@@ -455,13 +453,13 @@ impl Store {
             if line.starts_with("COMMIT ") {
                 if !commit_hash.is_empty() && in_files {
                     let cid = format!("commit:{}", &commit_hash[..8]);
-                    let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
+                    let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
                     if !commit_msg.is_empty() {
                         let ms: String = commit_msg.chars().take(80).collect();
-                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
+                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
                     }
                     if !commit_author.is_empty() {
-                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
+                        let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
                     }
                 }
                 let parts: Vec<&str> = line.split(' ').collect();
@@ -481,18 +479,18 @@ impl Store {
                     .file_stem()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
-                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6,?7)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(format!("file:{}", stem)).bind("modified_in").bind(&cid).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,?3,?4,1.0,?5,?6,?7)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(format!("file:{}", stem)).bind("modified_in").bind(&cid).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
             }
         }
         if !commit_hash.is_empty() && in_files {
             let cid = format!("commit:{}", &commit_hash[..8]);
-            let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
+            let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'commit',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_hash).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
             if !commit_msg.is_empty() {
                 let ms: String = commit_msg.chars().take(80).collect();
-                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'message',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&ms).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
             }
             if !commit_author.is_empty() {
-                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(&branch).bind(project).bind(&now).execute(&self.pool).await;
+                let _ = sqlx::query("INSERT OR IGNORE INTO kg_triples (id,subject,predicate,object,confidence,project,branch,created_at) VALUES (?1,?2,'author',?3,1.0,?4,?5,?6)").bind(format!("cg_{}", uuid::Uuid::new_v4())).bind(&cid).bind(&commit_author).bind(project).bind(&branch).bind(&now).execute(&self.pool).await;
             }
         }
         Ok(())

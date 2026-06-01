@@ -36,7 +36,7 @@ model2vec-rs = "0.2.1"
 petgraph = { version = "0.8.3", features = ["serde-1"] }
 notify = "7.0.0"
 
-[dev-dependencies]
+
 
 tempfile = "3"
 
