@@ -749,7 +749,17 @@ impl Store {
                         };
                         !m.starts_with(model_key)
                     })
-            });
+            })
+            // Edge case: no embeddings exist but vec_memories table has old dims.
+            // DROP + recreate so embed-worker doesn't hit dimension mismatch.
+            || (self.vec_dims > 0
+                && stored_dims.is_none()
+                && sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='vec_memories'"
+                )
+                .fetch_one(&self.pool)
+                .await?
+                > 0);
         if needs_rebuild {
             log::info!(
                 "init_vec: stored dims != {}, dropping vec0 + clearing embeddings",
