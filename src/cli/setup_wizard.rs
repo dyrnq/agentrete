@@ -229,15 +229,22 @@ fn configure_json(home: &Path, config_path: &str, root_key: &str) -> Result<()> 
 /// Codex CLI uses TOML format.
 fn configure_codex(home: &Path) -> Result<()> {
     use std::io::Write;
+    let config_path = home.join(".codex/config.toml");
+    if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path).unwrap_or_default();
+        if content.contains("[mcp_servers.agentrete]") {
+            log::info!("codex: already configured, skipping");
+            return Ok(());
+        }
+    }
     let mut f = std::fs::OpenOptions::new()
         .append(true)
-        .open(home.join(".codex/config.toml"))?;
-
+        .create(true)
+        .open(&config_path)?;
     let url = format!("http://127.0.0.1:{}/", DEFAULT_PORT);
-
     writeln!(f, "\n[mcp_servers.agentrete]")?;
     writeln!(f, "type = \"http\"")?;
-    writeln!(f, "url = \"{}\"", url)?;
+    writeln!(f, "url = \"{url}\"")?;
     Ok(())
 }
 
