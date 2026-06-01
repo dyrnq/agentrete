@@ -21,7 +21,7 @@ impl Model2VecEmbed {
             .unwrap_or(default_model_path.to_str().unwrap_or("/tmp/bge-small-256d"));
 
         // Guard: warn if model directory is unusually large (>2GB)
-        if let Ok(meta) = std::fs::metadata(path) {
+        let size_mb = if let Ok(meta) = std::fs::metadata(path) {
             let size_bytes: u64 = if meta.is_dir() {
                 walkdir::WalkDir::new(path)
                     .into_iter()
@@ -32,22 +32,30 @@ impl Model2VecEmbed {
             } else {
                 meta.len()
             };
-            let size_mb = size_bytes / (1024 * 1024);
-            if size_mb > 2048 {
+            let mb = size_bytes / (1024 * 1024);
+            if mb > 2048 {
                 log::warn!(
-                    "model2vec: model at {path} is {size_mb}MB — may cause OOM. Consider using a smaller model."
+                    "model2vec: model at {path} is {mb}MB — may cause OOM. Consider using a smaller model."
                 );
             }
-            log::info!("model2vec: model size ~{size_mb}MB");
-        }
+            mb
+        } else {
+            0
+        };
+        log::info!("model2vec: model size ~{size_mb}MB");
+
+        let load_start = std::time::Instant::now();
+        log::info!("model2vec: loading {} (~{size_mb}MB) ...", path);
 
         let model = StaticModel::from_pretrained(path, None, None, None)
             .map_err(|e| anyhow::anyhow!("Failed to load model2vec model from {path}: {e}"))?;
 
+        let elapsed = load_start.elapsed();
         log::info!(
-            "Model2Vec loaded: {} ({}d)",
+            "Model2Vec loaded: {} ({}d) in {:.1}s",
             path,
-            model.encode_single(".").len()
+            model.encode_single(".").len(),
+            elapsed.as_secs_f64()
         );
 
         Ok(Self { model })
