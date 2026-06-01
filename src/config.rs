@@ -15,9 +15,9 @@ const DEFAULT_PORT: u16 = 9092;
 #[serde(rename_all = "lowercase")]
 pub enum EmbeddingBackend {
     /// No embedding — BM25 FTS only.
+    #[default]
     None,
     /// Model2Vec static embeddings — distilled sentence-transformers, 10MB, ultra-fast CPU.
-    #[default]
     Model2Vec,
     /// Remote API (URL auto-detects vendor: OpenAI/Anthropic/Ollama).
     Remote,
