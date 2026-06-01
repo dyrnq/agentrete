@@ -271,6 +271,16 @@ impl Store {
         Ok(id)
     }
 
+    /// Clear all triples for a project+branch before re-scan.
+    pub async fn clear_kg(&self, project: &Option<String>, branch: &Option<String>) -> Result<()> {
+        sqlx::query("DELETE FROM kg_triples WHERE project IS ?1 AND branch IS ?2")
+            .bind(project)
+            .bind(branch)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Scan a codebase directory with tree-sitter and import results into KG.
     pub async fn scan_codebase(&self, root: &std::path::Path) -> Result<(usize, usize)> {
         let (symbols, relations) = crate::knowledge_graph::scanner::scan_directory(root)?;
@@ -1286,7 +1296,7 @@ fn detect_project_git_root(root: &std::path::Path) -> Option<std::path::PathBuf>
         })
 }
 
-fn detect_project_for_scan(root: &std::path::Path) -> Option<String> {
+pub(crate) fn detect_project_for_scan(root: &std::path::Path) -> Option<String> {
     // Try git first
     if let Ok(output) = std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
@@ -1309,7 +1319,7 @@ fn detect_project_for_scan(root: &std::path::Path) -> Option<String> {
 
 // ─── Re-embed integration tests ──────────────────────────────────────────────
 
-fn detect_git_branch(root: &std::path::Path) -> Option<String> {
+pub(crate) fn detect_git_branch(root: &std::path::Path) -> Option<String> {
     std::process::Command::new("git")
         .args(["branch", "--show-current"])
         .current_dir(root)

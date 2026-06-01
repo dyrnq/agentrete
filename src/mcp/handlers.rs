@@ -15,7 +15,7 @@ pub(crate) fn tools_list() -> Value {
         {"name":"memory_stats","description":"Stats","inputSchema":{"type":"object","properties":{},"required":[]}},
         {"name":"memory_compact","description":"Deduplicate memories (exact or semantic) and reclaim disk space","inputSchema":{"type":"object","properties":{"mode":{"type":"string"}},"required":[]}},
         {"name":"kg_query","description":"Query knowledge graph: neighbors, shortest path, or subgraph","inputSchema":{"type":"object","properties":{"mode":{"type":"string"},"entity":{"type":"string"},"target":{"type":"string"},"predicate":{"type":"string"},"direction":{"type":"string"},"project":{"type":"string"}},"required":["mode"]}},
-        {"name":"kg_scan","description":"Scan codebase with optional file watching. If watch=true, starts file watcher after scan completes.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"watch":{"type":"boolean"}},"required":["path"]}},{"name":"kg_scan_status","description":"Check if a background scan is running","inputSchema":{"type":"object","properties":{},"required":[]}}    ]})
+        {"name":"kg_scan","description":"Scan codebase with optional file watching. If watch=true, starts file watcher after scan completes.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"watch":{"type":"boolean"},"force":{"type":"boolean"}},"required":["path"]}},{"name":"kg_scan_status","description":"Check if a background scan is running","inputSchema":{"type":"object","properties":{},"required":[]}}    ]})
 }
 
 /// Detect project name from git repo root, falling back to current directory.
@@ -248,7 +248,16 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                         store
                             .scan_running
                             .store(true, std::sync::atomic::Ordering::Release);
+                        let force_scan = params["arguments"]["force"].as_bool().unwrap_or(false);
                         tokio::spawn(async move {
+                            if force_scan {
+                                let project = crate::storage::detect_project_for_scan(
+                                    std::path::Path::new(&path),
+                                );
+                                let branch =
+                                    crate::storage::detect_git_branch(std::path::Path::new(&path));
+                                let _ = store2.clear_kg(&project, &branch).await;
+                            }
                             let result = match store2
                                 .scan_codebase(std::path::Path::new(&path))
                                 .await
@@ -428,7 +437,16 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                         store
                             .scan_running
                             .store(true, std::sync::atomic::Ordering::Release);
+                        let force_scan = params["arguments"]["force"].as_bool().unwrap_or(false);
                         tokio::spawn(async move {
+                            if force_scan {
+                                let project = crate::storage::detect_project_for_scan(
+                                    std::path::Path::new(&path),
+                                );
+                                let branch =
+                                    crate::storage::detect_git_branch(std::path::Path::new(&path));
+                                let _ = store2.clear_kg(&project, &branch).await;
+                            }
                             let result = match store2
                                 .scan_codebase(std::path::Path::new(&path))
                                 .await
