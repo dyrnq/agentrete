@@ -3,11 +3,22 @@
 
 port: 9092
 
-embedding:
-  backend: remote      # none | local | remote
+# ─── MCP Backend ─────────────────────────────────────────────────────────────
+# Controls how agentrete speaks MCP protocol to clients.
+#
+# "native" (default): hand-rolled JSON-RPC, lightweight, /mcp + /health endpoints
+# "sdk":              rmcp crate Streamable HTTP, full spec compliance
+#
+# Both backends share the same /mcp and /health paths — switching is transparent.
 
-  # ── Local backend ──────────────────────────────────────────────
-  local:
+mcp:
+  backend: "native"
+
+embedding:
+  backend: remote      # none | model2vec | remote
+
+  # ── Model2Vec backend ──────────────────────────────────────────────
+  model2vec:
     # model: BAAI/bge-small-zh-v1.5
     # revision: main
     # dims: 512
@@ -29,8 +40,8 @@ embedding:
 
 # Local offline:
 # embedding:
-#   backend: local
-#   local:
+#   backend: model2vec
+#   model2vec:
 #     model: BAAI/bge-small-zh-v1.5
 #     dims: 256
   path: "/path/to/distilled/model"

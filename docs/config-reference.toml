@@ -6,6 +6,17 @@
 port = 9092
 # db_dir = "/path/to/data"
 # cache_dir = "/path/to/cache"
+# ─── MCP Backend ─────────────────────────────────────────────────────────────
+# Controls how agentrete speaks MCP protocol to clients.
+#
+# "native" (default): hand-rolled JSON-RPC, lightweight, /mcp + /health endpoints
+# "sdk":              rmcp crate Streamable HTTP, full spec compliance
+#
+# Both backends share the same /mcp and /health paths — switching is transparent.
+
+[mcp]
+backend = "native"
+
 
 # ─── Embedding ───────────────────────────────────────────────────────────────
 
