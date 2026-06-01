@@ -102,7 +102,10 @@ fn rrf_merge(
 }
 
 impl Store {
-    pub async fn open(cfg: &crate::config::Config, embedder: Option<Embedder>) -> Result<Self> {
+    pub async fn open(
+        cfg: &crate::config::Config,
+        embedder: Option<std::sync::Arc<Embedder>>,
+    ) -> Result<Self> {
         let dims = match cfg.embedding.backend {
             crate::config::EmbeddingBackend::None => {
                 log::info!("backend=none, dims=0, vec disabled");
@@ -170,7 +173,7 @@ impl Store {
         let store = Self {
             pool,
             path,
-            embedder: embedder.map(Arc::new),
+            embedder,
             graph: KnowledgeGraph::disabled(),
             scan_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             watch_handle: Arc::new(std::sync::Mutex::new(None)),
