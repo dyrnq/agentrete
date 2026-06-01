@@ -90,6 +90,7 @@ impl KnowledgeGraph {
     }
 
     /// Query neighbors of an entity.
+    #[allow(dead_code)]
     pub fn query_neighbors(
         &self,
         entity: &str,
@@ -143,6 +144,7 @@ impl KnowledgeGraph {
     }
 
     /// Shortest path between two entities via Dijkstra.
+    #[allow(dead_code)]
     pub fn query_path(&self, from: &str, to: &str) -> Option<Vec<String>> {
         use petgraph::algo::dijkstra;
 

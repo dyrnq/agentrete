@@ -337,6 +337,105 @@ impl Store {
     }
 
     /// Clear all triples for a project+branch before re-scan.
+    ///
+    /// Query KG neighbors with optional project filter (SQL-based for isolation).
+    pub async fn kg_query_neighbors(
+        &self,
+        entity: &str,
+        predicate: Option<&str>,
+        direction: &str,
+        project: Option<&str>,
+    ) -> Result<Vec<(String, String, String, f32)>> {
+        let query = if direction == "outgoing" {
+            if let Some(p) = predicate {
+                sqlx::query_as(
+                    "SELECT subject, predicate, object, confidence FROM kg_triples WHERE subject = ?1 AND predicate = ?2 AND project IS ?3"
+                ).bind(entity).bind(p).bind(project).fetch_all(&self.pool).await?
+            } else {
+                sqlx::query_as(
+                    "SELECT subject, predicate, object, confidence FROM kg_triples WHERE subject = ?1 AND project IS ?2"
+                ).bind(entity).bind(project).fetch_all(&self.pool).await?
+            }
+        } else if direction == "incoming" {
+            if let Some(p) = predicate {
+                sqlx::query_as(
+                    "SELECT subject, predicate, object, confidence FROM kg_triples WHERE object = ?1 AND predicate = ?2 AND project IS ?3"
+                ).bind(entity).bind(p).bind(project).fetch_all(&self.pool).await?
+            } else {
+                sqlx::query_as(
+                    "SELECT subject, predicate, object, confidence FROM kg_triples WHERE object = ?1 AND project IS ?2"
+                ).bind(entity).bind(project).fetch_all(&self.pool).await?
+            }
+        } else {
+            // both
+            if let Some(p) = predicate {
+                sqlx::query_as(
+                    "SELECT subject, predicate, object, confidence FROM kg_triples WHERE (subject = ?1 OR object = ?1) AND predicate = ?2 AND project IS ?3"
+                ).bind(entity).bind(p).bind(project).fetch_all(&self.pool).await?
+            } else {
+                sqlx::query_as(
+                    "SELECT subject, predicate, object, confidence FROM kg_triples WHERE (subject = ?1 OR object = ?1) AND project IS ?2"
+                ).bind(entity).bind(project).fetch_all(&self.pool).await?
+            }
+        };
+        Ok(query)
+    }
+
+    /// Simple BFS path query with project filter.
+    pub async fn kg_query_path(
+        &self,
+        from: &str,
+        to: &str,
+        project: Option<&str>,
+    ) -> Result<Option<Vec<String>>> {
+        use std::collections::{HashMap, VecDeque};
+        // Build adjacency from SQL (only for this project)
+        let edges: Vec<(String, String)> = if let Some(p) = project {
+            sqlx::query_as("SELECT subject, object FROM kg_triples WHERE project = ?1")
+                .bind(p)
+                .fetch_all(&self.pool)
+                .await?
+        } else {
+            sqlx::query_as("SELECT subject, object FROM kg_triples")
+                .fetch_all(&self.pool)
+                .await?
+        };
+
+        let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (s, o) in &edges {
+            adj.entry(s.as_str()).or_default().push(o.as_str());
+        }
+
+        let mut queue = VecDeque::new();
+        let mut parent: HashMap<&str, &str> = HashMap::new();
+        queue.push_back(from);
+        parent.insert(from, "");
+
+        while let Some(node) = queue.pop_front() {
+            if node == to {
+                let mut path = vec![to.to_string()];
+                let mut cur = to;
+                while let Some(&p) = parent.get(cur) {
+                    if p.is_empty() {
+                        break;
+                    }
+                    path.push(p.to_string());
+                    cur = p;
+                }
+                path.reverse();
+                return Ok(Some(path));
+            }
+            if let Some(neighbors) = adj.get(node) {
+                for &n in neighbors {
+                    if !parent.contains_key(n) {
+                        parent.insert(n, node);
+                        queue.push_back(n);
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
     pub async fn clear_kg(&self, project: &Option<String>, branch: &Option<String>) -> Result<()> {
         sqlx::query("DELETE FROM kg_triples WHERE project IS ?1 AND branch IS ?2")
             .bind(project)

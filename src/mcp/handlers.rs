@@ -306,6 +306,7 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                     let entity = a["entity"].as_str().unwrap_or("");
                     let predicate = a["predicate"].as_str();
                     let direction = a["direction"].as_str().unwrap_or("both");
+                    let project = a["project"].as_str().map(|s| s.to_string());
                     if !store.graph.is_enabled() {
                         return jsonrpc_err(&id, -32000, "Knowledge graph is disabled. Set [knowledge_graph] enabled = true in config.");
                     }
@@ -317,7 +318,15 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                                 "kg_query mode='neighbors' requires 'entity'",
                             );
                         }
-                        let results = store.graph.query_neighbors(entity, predicate, direction);
+                        let results = match store
+                            .kg_query_neighbors(entity, predicate, direction, project.as_deref())
+                            .await
+                        {
+                            Ok(r) => r,
+                            Err(e) => {
+                                return jsonrpc_err(&id, -32000, &format!("Query failed: {e}"))
+                            }
+                        };
                         let text = if results.is_empty() {
                             format!("No relations found for '{}'", entity)
                         } else {
@@ -326,11 +335,11 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
 ",
                                 entity
                             );
-                            for (target, rel, conf) in &results {
+                            for (subj, rel, obj, conf) in &results {
                                 s.push_str(&format!(
                                     "  {} --[{}]--> {} (conf={})
 ",
-                                    entity, rel, target, conf
+                                    subj, rel, obj, conf
                                 ));
                             }
                             s
@@ -355,19 +364,23 @@ pub(crate) async fn handle_rpc(store: &Store, method: &str, params: &Value) -> V
                                 "kg_query mode='path' requires 'target'",
                             );
                         }
-                        match store.graph.query_path(entity, target) {
-                            Some(path) => {
+                        match store
+                            .kg_query_path(entity, target, project.as_deref())
+                            .await
+                        {
+                            Ok(Some(path)) => {
                                 let text = format!("Shortest path: {}", path.join(" → "));
                                 jsonrpc_ok(
                                     &id,
                                     serde_json::json!({"content":[{"type":"text","text":text}]}),
                                 )
                             }
-                            None => jsonrpc_err(
+                            Ok(None) => jsonrpc_err(
                                 &id,
                                 -32000,
                                 &format!("No path found between '{}' and '{}'", entity, target),
                             ),
+                            Err(e) => jsonrpc_err(&id, -32000, &format!("Query failed: {e}")),
                         }
                     } else {
                         jsonrpc_err(
