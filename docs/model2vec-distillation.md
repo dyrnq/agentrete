@@ -169,7 +169,7 @@ All above are sentence-transformers compatible and can be distilled.
 
 ## Distilled Models Summary
 
-Generated via `.dev/distill-models.py` (May 30, 2026). All models stored at `~/.cache/model2vec/{slug}-{dim}d/`.
+Generated via `scripts/distill-models.py` (May 30, 2026). All models stored at `~/.cache/model2vec/{slug}-{dim}d/`.
 
 | Model | 256d | 512d | 768d | 1024d | 384d | Notes |
 |-------|------|------|------|-------|------|-------|
